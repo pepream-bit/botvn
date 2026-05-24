@@ -1,32 +1,32 @@
 const TelegramBot = require('node-telegram-bot-api');
 const http = require('http');
 
-// ⚙️ การตั้งค่าระบบ
+// ⚙️ การตั้งค่าระบบหลัก
 const token = '8442128239:AAHaQ9RxL98guoJV63nxnWWRd6vCbtLKwZU';
 const MY_USER_ID = 8551205702;
 const TARGET_GROUP_ID = -1002802866220;
 
-// เปิดใช้งานบอทระบบ Polling (ตื่นตลอดเวลา ไม่ต้องใช้ Webhook)
+// เปิดใช้งานบอทระบบ Polling (เสถียร 24 ชม. ไม่ดีเลย์ ไม่ใช้ Webhook)
 const bot = new TelegramBot(token, { polling: true });
 
 console.log('🤖 DARK VN BOT กำลังเริ่มทำงานบน Render...');
 
-// 🛡️ ดักจับคำสั่ง /start
+// 🛡️ ดักจับคำสั่ง /start (เช็คสถานะบอท)
 bot.onText(/\/start/, (msg) => {
   const chatId = msg.chat.id;
   const senderId = msg.from.id;
 
-  // ความปลอดภัยสูงสุด: คุยเฉพาะแชทส่วนตัวกับคุณเท่านั้น
+  // ป้องกันความปลอดภัย: ตอบกลับเฉพาะแชทส่วนตัวกับคุณเท่านั้น
   if (senderId !== MY_USER_ID || chatId !== MY_USER_ID) return;
 
   const startText = 
-    `🤖 <b>ระบบ DARK VN BOT ออนไลน์แล้ว! [Render Version]</b>\n` +
-    `━━━━━━━━━━━━━━━━━━━━\n` +
+    `🤖 <b>ระบบ DARK VN BOT ออนไลน์แล้ว! [Render]</b>\n` +
+    `▫️▫️▫️▫️▫️▫️▫️▫️▫️\n` +
     `บอทพร้อมรับคำสั่งจากคุณคนเดียวเรียบร้อยครับ\n\n` +
     `📌 <b>คำสั่งใช้งานที่มี:</b>\n` +
-    `• <code>/ban [ไอดี] [เหตุผล]</code> - สำหรับสั่งแบน\n` +
+    `• <code>/ban [ไอดี] [เหตุผล]</code> - สำหรับสั่งแบน (เตะออกกลุ่ม)\n` +
     `• <code>/unban [ไอดี] [เหตุผล]</code> - สำหรับปลดแบน\n` +
-    `━━━━━━━━━━━━━━━━━━━━\n` +
+    `▫️▫️▫️▫️▫️▫️▫️▫️▫️\n` +
     `✨ <i>ระบบทำงานด้วยความเร็วสูงสุด ไม่มีดีเลย์</i>`;
 
   bot.sendMessage(chatId, startText, { parse_mode: 'HTML' });
@@ -38,6 +38,7 @@ bot.on('message', async (msg) => {
   const senderId = msg.from.id;
   const text = msg.text || '';
 
+  // ตรวจสอบสิทธิ์ความปลอดภัยสูงสุด
   if (senderId !== MY_USER_ID || chatId !== MY_USER_ID) return;
 
   if (text.startsWith('/ban ') || text.startsWith('/unban ')) {
@@ -46,6 +47,7 @@ bot.on('message', async (msg) => {
     const targetUserId = args[1];
     const reason = args.slice(2).join(' ') || 'ไม่ระบุสาเหตุ';
 
+    // เช็คถ้ารูปแบบไอดีไม่ใช่ตัวเลขให้แจ้งเตือน
     if (!targetUserId || isNaN(targetUserId)) {
       bot.sendMessage(MY_USER_ID, '❌ <b>รูปแบบคำสั่งไม่ถูกต้อง</b>\nกรุณาพิมพ์: <code>/ban ไอดี เหตุผล</code>', { parse_mode: 'HTML' });
       return;
@@ -53,7 +55,8 @@ bot.on('message', async (msg) => {
 
     if (command === '/ban') {
       try {
-        await bot.banChatMember(TARGET_GROUP_ID, targetUserId, { revoke_messages: true });
+        // 🚫 ทำการแบนและเตะออกจากกลุ่มทันที (โดยไม่สั่งลบข้อมูลเก่าเพื่อป้องกัน Limit)
+        await bot.banChatMember(TARGET_GROUP_ID, targetUserId);
         sendCoolStyleMessage('BAN', targetUserId, reason);
       } catch (err) {
         bot.sendMessage(MY_USER_ID, `❌ <b>เกิดข้อผิดพลาดในการแบน:</b>\n<code>${err.message}</code>`, { parse_mode: 'HTML' });
@@ -69,34 +72,36 @@ bot.on('message', async (msg) => {
   }
 });
 
-// 🎨 ฟังก์ชันส่งประกาศเข้ากลุ่ม และตั้งเวลาทำลายตัวเองใน 1 นาที
+// 🎨 ฟังก์ชันส่งประกาศดีไซน์มินิมอล และตั้งเวลาทำลายตัวเองใน 1 นาที
 async function sendCoolStyleMessage(action, userId, reason) {
   const isBan = action === 'BAN';
   const statusEmoji = isBan ? '🔴' : '🟢';
   const actionTitle = isBan ? '⛔ BANNED & RESTRICTED' : '🔓 ACCESS RE-GRANTED';
   const actionText = isBan ? 'ถูกจำกัดสิทธิ์และเตะออกจากกลุ่ม' : 'ถูกปลดรายชื่อออกจากบัญชีดำแล้ว';
   
+  // 📱 ดีไซน์เส้นคั่นแบบจุดสั้น สวยงาม ไม่ล้นหน้าจอมือถือ
   const template = 
     `<b>${statusEmoji} SYSTEM COMMAND EXECUTED</b>\n` +
-    `❖━━━━━━━━━━━━━━━━━━━━━━━━❖\n\n` +
+    `▫️▫️▫️▫️▫️▫️▫️▫️▫️\n\n` +
     `⚡ <b>Action:</b> <code>${actionTitle}</code>\n` +
     `👤 <b>Target ID:</b> <code>${userId}</code>\n` +
     `📝 <b>Reason:</b> <i>${reason}</i>\n\n` +
-    `❖━━━━━━━━━━━━━━━━━━━━━━━━❖\n` +
+    `▫️▫️▫️▫️▫️▫️▫️▫️▫️\n` +
     `✨ <i>Status: ผู้ใช้งาน${actionText}</i>\n` +
     `⏳ <i>(ข้อความประกาศนี้จะทำลายตัวเองใน 1 นาที)</i>`;
 
   try {
-    // ส่งเข้ากลุ่มเป้าหมาย
+    // 1. ยิงข้อความประกาศแจ้งเตือนเข้าไปในกลุ่มหลัก
     const groupMsg = await bot.sendMessage(TARGET_GROUP_ID, template, { parse_mode: 'HTML' });
-    // ส่งรายงานให้คุณในแชทส่วนตัว
+
+    // 2. ส่งใบงานสรุปกลับมาให้คุณในแชทส่วนตัว
     bot.sendMessage(MY_USER_ID, `✅ <b>ทำรายการสำเร็จแล้ว!</b>\n\n${template}`, { parse_mode: 'HTML' });
 
-    // ⏳ ตั้งเวลาลบข้อความประกาศในกลุ่มหลังจากผ่านไป 60 วินาที (1 นาที)
+    // ⏳ สั่งนับถอยหลังลบข้อความประกาศในกลุ่มทิ้งอัตโนมัติเมื่อครบ 60 วินาที (1 นาที)
     setTimeout(async () => {
       try {
         await bot.deleteMessage(TARGET_GROUP_ID, groupMsg.message_id);
-        console.log(`🗑️ ลบข้อความประกาศแบน ID ${groupMsg.message_id} เรียบร้อย`);
+        console.log(`🗑️ ระบบทำการลบข้อความแจ้งเตือนแบนในกลุ่มเรียบร้อยแล้ว`);
       } catch (e) {
         console.error('ไม่สามารถลบข้อความได้ อาจมีคนลบไปก่อนแล้ว:', e.message);
       }
@@ -107,7 +112,7 @@ async function sendCoolStyleMessage(action, userId, reason) {
   }
 }
 
-// 🌐 ทำเว็บเซิร์ฟเวอร์หลอกไว้ (เพราะ Render บังคับว่าต้องมี Port เปิดรับ ไม่เช่นนั้นจะโดนตัดตกระบบ)
+// 🌐 เว็บเซิร์ฟเวอร์ย่อยสำหรับเปิดพอร์ตหลอก สแตนด์บายให้ระบบ Render ตรวจสอบสถานะ
 const server = http.createServer((req, res) => {
   res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
   res.end('🤖 DARK VN BOT [Render Version] ทำงานปกติ 100%');
