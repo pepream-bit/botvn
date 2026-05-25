@@ -1,122 +1,91 @@
 const TelegramBot = require('node-telegram-bot-api');
 const http = require('http');
 
-// 🛡️ ป้องกันระบบหลุด: ดึงการตั้งค่าจากระบบ Environment Variables ของ Render
+// 🛡️ ดึงค่าตัวแปรลับจาก Render (จะไม่แสดงรหัสใน GitHub)
 const token = process.env.BOT_TOKEN;
 const MY_USER_ID = parseInt(process.env.MY_USER_ID);
 const TARGET_GROUP_ID = parseInt(process.env.TARGET_GROUP_ID);
+const LOG_CHANNEL_ID = parseInt(process.env.LOG_CHANNEL_ID);
 
-// ตรวจสอบความปลอดภัยก่อนเริ่มรันระบบ
-if (!token || !MY_USER_ID || !TARGET_GROUP_ID) {
-  console.error('❌ ไม่สามารถเริ่มทำงานได้: กรุณาตั้งค่า Environment Variables ให้ครบถ้วนบน Render');
+if (!token || !MY_USER_ID || !TARGET_GROUP_ID || !LOG_CHANNEL_ID) {
+  console.error('❌ ข้อมูล Environment Variables ไม่ครบถ้วน กรุณาตรวจสอบบน Render');
   process.exit(1);
 }
 
-// เปิดใช้งานบอทระบบ Polling (เสถียร 24 ชม. ไม่ดีเลย์)
 const bot = new TelegramBot(token, { polling: true });
+console.log('🤖 DARK VN BOT เริ่มทำงาน (Secure Mode + Auto Log)...');
 
-console.log('🤖 DARK VN BOT กำลังเริ่มทำงานในโหมดปลอดภัยสูงสุด...');
-
-// 🛡️ ดักจับคำสั่ง /start
 bot.onText(/\/start/, (msg) => {
-  const chatId = msg.chat.id;
-  const senderId = msg.from.id;
-
-  if (senderId !== MY_USER_ID || chatId !== MY_USER_ID) return;
-
-  const startText = 
-    `🤖 <b>ระบบ DARK VN BOT ออนไลน์แล้ว! [Render-Secure]</b>\n` +
-    `▫️▫️▫️▫️▫️▫️▫️▫️▫️\n` +
-    `บอทพร้อมรับคำสั่งจากคุณคนเดียวเรียบร้อยครับ\n\n` +
-    `📌 <b>คำสั่งใช้งานที่มี:</b>\n` +
-    `• <code>/ban [ไอดี] [เหตุผล]</code> - สำหรับสั่งแบน (เตะออกกลุ่ม)\n` +
-    `• <code>/unban [ไอดี] [เหตุผล]</code> - สำหรับปลดแบน\n` +
-    `▫️▫️▫️▫️▫️▫️▫️▫️▫️\n` +
-    `✨ <i>ระบบทำงานในโหมดปิดความลับ ปลอดภัย 100%</i>`;
-
-  bot.sendMessage(chatId, startText, { parse_mode: 'HTML' });
+  if (msg.from.id !== MY_USER_ID) return;
+  bot.sendMessage(msg.chat.id, "🤖 <b>ระบบ DARK VN BOT ออนไลน์!</b>\nพร้อมรับคำสั่ง แบน/ปลดแบน และบันทึก Log แล้ว", { parse_mode: 'HTML' });
 });
 
-// 📩 ดักจับคำสั่ง /ban และ /unban
 bot.on('message', async (msg) => {
-  const chatId = msg.chat.id;
-  const senderId = msg.from.id;
-  const text = msg.text || '';
+  if (msg.from.id !== MY_USER_ID) return;
+  if (!msg.text || (!msg.text.startsWith('/ban ') && !msg.text.startsWith('/unban '))) return;
 
-  if (senderId !== MY_USER_ID || chatId !== MY_USER_ID) return;
+  const args = msg.text.split(' ');
+  const command = args[0];
+  const targetUserId = args[1];
+  const reason = args.slice(2).join(' ') || 'ไม่ระบุสาเหตุ';
 
-  if (text.startsWith('/ban ') || text.startsWith('/unban ')) {
-    const args = text.split(' ');
-    const command = args[0];
-    const targetUserId = args[1];
-    const reason = args.slice(2).join(' ') || 'ไม่ระบุสาเหตุ';
+  if (!targetUserId || isNaN(targetUserId)) {
+    return bot.sendMessage(MY_USER_ID, '❌ รูปแบบไม่ถูกต้อง: ใช้ <code>/ban ไอดี เหตุผล</code> หรือ <code>/unban ไอดี เหตุผล</code>', { parse_mode: 'HTML' });
+  }
 
-    if (!targetUserId || isNaN(targetUserId)) {
-      bot.sendMessage(MY_USER_ID, '❌ <b>รูปแบบคำสั่งไม่ถูกต้อง</b>\nกรุณาพิมพ์: <code>/ban ไอดี เหตุผล</code>', { parse_mode: 'HTML' });
-      return;
+  const timeStamp = new Date().toLocaleString('th-TH', { timeZone: 'Asia/Bangkok' });
+
+  if (command === '/ban') {
+    try {
+      await bot.banChatMember(TARGET_GROUP_ID, targetUserId);
+      
+      // ประกาศในกลุ่ม (ลบทิ้งใน 1 นาที)
+      const m = await bot.sendMessage(TARGET_GROUP_ID, `⛔ <b>BANNED & RESTRICTED</b>\n👤 ID: <code>${targetUserId}</code>\n📝 เหตุผล: ${reason}`, { parse_mode: 'HTML' });
+      setTimeout(() => bot.deleteMessage(TARGET_GROUP_ID, m.message_id).catch(() => {}), 60000);
+      
+      // ส่ง Log เข้า Channel (ถาวร)
+      await bot.sendMessage(LOG_CHANNEL_ID, 
+        `📜 <b>[ SYSTEM LOG - BAN ]</b>\n` +
+        `▫️▫️▫️▫️▫️▫️▫️▫️▫️\n` +
+        `🔴 <b>การกระทำ:</b> สั่งแบนผู้ใช้งาน\n` +
+        `👤 <b>เป้าหมาย ID:</b> <code>${targetUserId}</code>\n` +
+        `📝 <b>เหตุผล:</b> <i>${reason}</i>\n` +
+        `▫️▫️▫️▫️▫️▫️▫️▫️▫️\n` +
+        `⏰ <b>เวลา:</b> ${timeStamp} น.`, 
+        { parse_mode: 'HTML' }
+      );
+
+      bot.sendMessage(MY_USER_ID, `✅ แบนและส่ง Log สำเร็จ: <code>${targetUserId}</code>`, { parse_mode: 'HTML' });
+    } catch (e) { 
+      bot.sendMessage(MY_USER_ID, `❌ Error:\n<code>${e.message}</code>`, { parse_mode: 'HTML' }); 
     }
+    
+  } else if (command === '/unban') {
+    try {
+      await bot.unbanChatMember(TARGET_GROUP_ID, targetUserId, { only_if_banned: true });
+      
+      // ประกาศในกลุ่ม (ลบทิ้งใน 1 นาที)
+      const m = await bot.sendMessage(TARGET_GROUP_ID, `🟢 <b>ACCESS RE-GRANTED</b>\n👤 ID: <code>${targetUserId}</code>\n📝 ผู้ใช้งานถูกปลดแบนเรียบร้อย`, { parse_mode: 'HTML' });
+      setTimeout(() => bot.deleteMessage(TARGET_GROUP_ID, m.message_id).catch(() => {}), 60000);
 
-    if (command === '/ban') {
-      try {
-        await bot.banChatMember(TARGET_GROUP_ID, targetUserId);
-        sendCoolStyleMessage('BAN', targetUserId, reason);
-      } catch (err) {
-        bot.sendMessage(MY_USER_ID, `❌ <b>เกิดข้อผิดพลาดในการแบน:</b>\n<code>${err.message}</code>`, { parse_mode: 'HTML' });
-      }
-    } else if (command === '/unban') {
-      try {
-        await bot.unbanChatMember(TARGET_GROUP_ID, targetUserId, { only_if_banned: true });
-        sendCoolStyleMessage('UNBAN', targetUserId, reason);
-      } catch (err) {
-        bot.sendMessage(MY_USER_ID, `❌ <b>เกิดข้อผิดพลาดในการปลดแบน:</b>\n<code>${err.message}</code>`, { parse_mode: 'HTML' });
-      }
+      // ส่ง Log เข้า Channel (ถาวร)
+      await bot.sendMessage(LOG_CHANNEL_ID, 
+        `📜 <b>[ SYSTEM LOG - UNBAN ]</b>\n` +
+        `▫️▫️▫️▫️▫️▫️▫️▫️▫️\n` +
+        `🟢 <b>การกระทำ:</b> ปลดแบนผู้ใช้งาน\n` +
+        `👤 <b>เป้าหมาย ID:</b> <code>${targetUserId}</code>\n` +
+        `📝 <b>เหตุผล:</b> <i>${reason}</i>\n` +
+        `▫️▫️▫️▫️▫️▫️▫️▫️▫️\n` +
+        `⏰ <b>เวลา:</b> ${timeStamp} น.`, 
+        { parse_mode: 'HTML' }
+      );
+
+      bot.sendMessage(MY_USER_ID, `✅ ปลดแบนและส่ง Log สำเร็จ: <code>${targetUserId}</code>`, { parse_mode: 'HTML' });
+    } catch (e) { 
+      bot.sendMessage(MY_USER_ID, `❌ Error:\n<code>${e.message}</code>`, { parse_mode: 'HTML' }); 
     }
   }
 });
 
-// 🎨 ฟังก์ชันส่งประกาศเข้ากลุ่ม และตั้งเวลาทำลายตัวเองใน 1 นาที
-async function sendCoolStyleMessage(action, userId, reason) {
-  const isBan = action === 'BAN';
-  const statusEmoji = isBan ? '🔴' : '🟢';
-  const actionTitle = isBan ? '⛔ BANNED & RESTRICTED' : '🔓 ACCESS RE-GRANTED';
-  const actionText = isBan ? 'ถูกจำกัดสิทธิ์และเตะออกจากกลุ่ม' : 'ถูกปลดรายชื่อออกจากบัญชีดำแล้ว';
-  
-  const template = 
-    `<b>${statusEmoji} SYSTEM COMMAND EXECUTED</b>\n` +
-    `▫️▫️▫️▫️▫️▫️▫️▫️▫️\n\n` +
-    `⚡ <b>Action:</b> <code>${actionTitle}</code>\n` +
-    `👤 <b>Target ID:</b> <code>${userId}</code>\n` +
-    `📝 <b>Reason:</b> <i>${reason}</i>\n\n` +
-    `▫️▫️▫️▫️▫️▫️▫️▫️▫️\n` +
-    `✨ <i>Status: ผู้ใช้งาน${actionText}</i>\n` +
-    `⏳ <i>(ข้อความประกาศนี้จะทำลายตัวเองใน 1 นาที)</i>`;
-
-  try {
-    const groupMsg = await bot.sendMessage(TARGET_GROUP_ID, template, { parse_mode: 'HTML' });
-
-    const briefAdminText = `✅ <b>ทำรายการ ${action} สำเร็จ!</b>\n👤 Target ID: <code>${userId}</code>`;
-    bot.sendMessage(MY_USER_ID, briefAdminText, { parse_mode: 'HTML' });
-
-    setTimeout(async () => {
-      try {
-        await bot.deleteMessage(TARGET_GROUP_ID, groupMsg.message_id);
-        console.log(`🗑️ ลบข้อความประกาศในกลุ่มเรียบร้อย`);
-      } catch (e) {
-        console.error('ไม่สามารถลบข้อความได้ อาจมีคนลบไปก่อนแล้ว:', e.message);
-      }
-    }, 60 * 1000);
-
-  } catch (err) {
-    console.error('เกิดข้อผิดพลาดในระบบส่งข้อความ:', err.message);
-  }
-}
-
-const server = http.createServer((req, res) => {
-  res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
-  res.end('🤖 DARK VN BOT [Secure Mode] ออนไลน์ปกติ 100%');
-});
-
-const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
-  console.log(`🌍 เว็บเซิร์ฟเวอร์สแตนด์บายความปลอดภัยที่พอร์ต ${PORT}`);
-});
+// เปิดพอร์ตให้ Render ตรวจสอบว่าบอทไม่ตาย
+http.createServer((req, res) => res.end('OK')).listen(process.env.PORT || 3000);
