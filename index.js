@@ -1,7 +1,7 @@
 const TelegramBot = require('node-telegram-bot-api');
 const http = require('http');
 
-// 🛡️ ดึงค่าตัวแปรลับจาก Render (จะไม่แสดงรหัสใน GitHub)
+// 🛡️ ดึงค่าตัวแปรลับจาก Render
 const token = process.env.BOT_TOKEN;
 const MY_USER_ID = parseInt(process.env.MY_USER_ID);
 const TARGET_GROUP_ID = parseInt(process.env.TARGET_GROUP_ID);
@@ -13,28 +13,29 @@ if (!token || !MY_USER_ID || !TARGET_GROUP_ID || !LOG_CHANNEL_ID) {
 }
 
 const bot = new TelegramBot(token, { polling: true });
-console.log('🤖 DARK VN BOT เริ่มทำงาน (Inline Keyboard + Auto Log)...');
+console.log('🛸 Alian Attack Bot เริ่มทำงาน (ปิดระบบ /ban แบบข้อความเพื่อหลบ GroupHelp)...');
 
 // ==========================================
-// ฟังก์ชันจัดการ การแบน (แยกออกมาเพื่อให้โค้ดเป็นระเบียบ)
+// ฟังก์ชันจัดการ การแบน (ธีม Alian Attack)
 // ==========================================
 async function executeBan(targetUserId, reason, chatId) {
   if (!targetUserId || isNaN(targetUserId)) {
-    return bot.sendMessage(chatId, '❌ รูปแบบไม่ถูกต้อง: ไอดีต้องเป็นตัวเลขเท่านั้น', { parse_mode: 'HTML' });
+    return bot.sendMessage(chatId, '❌ ข้อมูลผิดพลาด: กรุณาระบุเป็นตัวเลขไอดีเท่านั้น', { parse_mode: 'HTML' });
   }
   const timeStamp = new Date().toLocaleString('th-TH', { timeZone: 'Asia/Bangkok' });
+  
   try {
     await bot.banChatMember(TARGET_GROUP_ID, targetUserId);
     
-    // ประกาศในกลุ่ม (ลบทิ้งใน 1 นาที)
-    const m = await bot.sendMessage(TARGET_GROUP_ID, `⛔ <b>BANNED & RESTRICTED</b>\n👤 ID: <code>${targetUserId}</code>\n📝 เหตุผล: ${reason}`, { parse_mode: 'HTML' });
+    // ประกาศในกลุ่ม (ลบทิ้งใน 1 นาที) - ธีมยานแม่
+    const m = await bot.sendMessage(TARGET_GROUP_ID, `🛸 <b>ALIEN ABDUCTION (แบนผู้ใช้)</b>\n👽 เป้าหมาย ID: <code>${targetUserId}</code> ถูกยานแม่ Alian Attack ดูดออกจากพื้นที่แล้ว!\n📝 ข้อหา: ${reason}`, { parse_mode: 'HTML' });
     setTimeout(() => bot.deleteMessage(TARGET_GROUP_ID, m.message_id).catch(() => {}), 60000);
     
     // ส่ง Log ถาวร
     await bot.sendMessage(LOG_CHANNEL_ID, 
       `📜 <b>[ SYSTEM LOG - BAN ]</b>\n` +
       `▫️▫️▫️▫️▫️▫️▫️▫️▫️\n` +
-      `🔴 <b>การกระทำ:</b> สั่งแบนผู้ใช้งาน\n` +
+      `🔴 <b>การกระทำ:</b> สั่งแบนผู้ใช้งาน (Alian Attack)\n` +
       `👤 <b>เป้าหมาย ID:</b> <code>${targetUserId}</code>\n` +
       `📝 <b>เหตุผล:</b> <i>${reason}</i>\n` +
       `▫️▫️▫️▫️▫️▫️▫️▫️▫️\n` +
@@ -42,24 +43,27 @@ async function executeBan(targetUserId, reason, chatId) {
       { parse_mode: 'HTML' }
     );
 
-    bot.sendMessage(chatId, `✅ แบนและส่ง Log สำเร็จ: <code>${targetUserId}</code>`, { parse_mode: 'HTML' });
+    bot.sendMessage(chatId, `✅ ยานแม่จับกุมสำเร็จและส่ง Log เรียบร้อย: <code>${targetUserId}</code>`, { parse_mode: 'HTML' });
   } catch (e) { 
-    bot.sendMessage(chatId, `❌ Error:\n<code>${e.message}</code>`, { parse_mode: 'HTML' }); 
+    // กรณีที่คนนั้นโดนแบนไปแล้ว หรือบอทไม่มีสิทธิ์
+    bot.sendMessage(chatId, `⚠️ <b>เป้าหมายนี้ถูกกำจัดไปแล้ว!</b> 🛸\n(เป้าหมายอาจจะโดนแบนไปก่อนหน้าแล้ว หรือยานแม่ไม่มีสิทธิ์แบนคนนี้)\n\n<code>รายละเอียดระบบ: ${e.message}</code>`, { parse_mode: 'HTML' }); 
   }
 }
 
 // ==========================================
-// ฟังก์ชันจัดการ การปลดแบน
+// ฟังก์ชันจัดการ การปลดแบน (ธีม Alian Attack)
 // ==========================================
 async function executeUnban(targetUserId, reason, chatId) {
   if (!targetUserId || isNaN(targetUserId)) {
-    return bot.sendMessage(chatId, '❌ รูปแบบไม่ถูกต้อง: ไอดีต้องเป็นตัวเลขเท่านั้น', { parse_mode: 'HTML' });
+    return bot.sendMessage(chatId, '❌ ข้อมูลผิดพลาด: กรุณาระบุเป็นตัวเลขไอดีเท่านั้น', { parse_mode: 'HTML' });
   }
   const timeStamp = new Date().toLocaleString('th-TH', { timeZone: 'Asia/Bangkok' });
+  
   try {
     await bot.unbanChatMember(TARGET_GROUP_ID, targetUserId, { only_if_banned: true });
     
-    const m = await bot.sendMessage(TARGET_GROUP_ID, `🟢 <b>ACCESS RE-GRANTED</b>\n👤 ID: <code>${targetUserId}</code>\n📝 ผู้ใช้งานถูกปลดแบนเรียบร้อย`, { parse_mode: 'HTML' });
+    // ประกาศในกลุ่ม (ลบทิ้งใน 1 นาที)
+    const m = await bot.sendMessage(TARGET_GROUP_ID, `🛸 <b>TARGET RELEASED (ปลดแบน)</b>\n👽 เป้าหมาย ID: <code>${targetUserId}</code> ได้รับการปล่อยตัวจากยานแม่!\n📝 เหตุผล: ${reason}`, { parse_mode: 'HTML' });
     setTimeout(() => bot.deleteMessage(TARGET_GROUP_ID, m.message_id).catch(() => {}), 60000);
 
     await bot.sendMessage(LOG_CHANNEL_ID, 
@@ -75,12 +79,12 @@ async function executeUnban(targetUserId, reason, chatId) {
 
     bot.sendMessage(chatId, `✅ ปลดแบนและส่ง Log สำเร็จ: <code>${targetUserId}</code>`, { parse_mode: 'HTML' });
   } catch (e) { 
-    bot.sendMessage(chatId, `❌ Error:\n<code>${e.message}</code>`, { parse_mode: 'HTML' }); 
+    bot.sendMessage(chatId, `⚠️ <b>ไม่สามารถปล่อยตัวได้!</b>\n(อาจจะไม่ได้โดนแบนอยู่ หรือมีข้อผิดพลาดระบบ)\n\n<code>รายละเอียดระบบ: ${e.message}</code>`, { parse_mode: 'HTML' }); 
   }
 }
 
 // ==========================================
-// 1. ส่งหน้าต่างปุ่มกด Inline Keyboard เมื่อพิมพ์ /start
+// 1. ส่งหน้าต่างปุ่มกดเมื่อพิมพ์ /start
 // ==========================================
 bot.onText(/\/start/, (msg) => {
   if (msg.from.id !== MY_USER_ID) return;
@@ -90,82 +94,76 @@ bot.onText(/\/start/, (msg) => {
     reply_markup: {
       inline_keyboard: [
         [
-          { text: '🔴 แบน (Ban)', callback_data: 'cmd_ban' },
-          { text: '🟢 ปลดแบน (Unban)', callback_data: 'cmd_unban' }
+          { text: '🛸 จับกุม (Ban)', callback_data: 'cmd_ban' },
+          { text: '🟢 ปล่อยตัว (Unban)', callback_data: 'cmd_unban' }
         ],
         [
-          { text: '📢 ประกาศข้อความลงกลุ่ม', callback_data: 'cmd_announce' }
+          { text: '📢 ประกาศคำสั่งยานแม่', callback_data: 'cmd_announce' }
         ]
       ]
     }
   };
   
-  bot.sendMessage(msg.chat.id, "🤖 <b>ระบบ DARK VN BOT ออนไลน์!</b>\nกรุณากดเลือกเมนูที่ต้องการใช้งานด้านล่างนี้:", options);
+  bot.sendMessage(msg.chat.id, "🛸 <b>ยานแม่ Alian Attack ออนไลน์!</b>\nกรุณากดเลือกเมนูควบคุมยานแม่ด้านล่างนี้:", options);
 });
 
 // ==========================================
 // 2. จัดการคำสั่งเมื่อคุณกดปุ่มบนจอ
 // ==========================================
 bot.on('callback_query', (query) => {
-  if (query.from.id !== MY_USER_ID) return bot.answerCallbackQuery(query.id, { text: 'ไม่มีสิทธิ์ใช้งาน', show_alert: true });
+  if (query.from.id !== MY_USER_ID) return bot.answerCallbackQuery(query.id, { text: 'คุณไม่มีสิทธิ์ควบคุมยานแม่!', show_alert: true });
   
   const chatId = query.message.chat.id;
   
-  // ตั้งค่าให้บอทบังคับให้คุณกด Reply ตัวมันเองอัตโนมัติ (Force Reply)
   if (query.data === 'cmd_ban') {
-    bot.sendMessage(chatId, '🔴 <b>โหมดแบนผู้ใช้</b>\nกรุณาพิมพ์:\n<code>ไอดี เหตุผล</code>\n(เช่น 123456789 สแปมกลุ่ม)', {
+    bot.sendMessage(chatId, '🛸 <b>โหมดจับกุม (แบน)</b>\nกรุณาพิมพ์:\n<code>ไอดี เหตุผล</code>\n(เช่น 123456789 สแปมกลุ่ม)', {
       parse_mode: 'HTML', reply_markup: { force_reply: true }
     });
   } else if (query.data === 'cmd_unban') {
-    bot.sendMessage(chatId, '🟢 <b>โหมดปลดแบนผู้ใช้</b>\nกรุณาพิมพ์:\n<code>ไอดี เหตุผล</code>\n(เช่น 123456789 ขอโอกาส)', {
+    bot.sendMessage(chatId, '🟢 <b>โหมดปล่อยตัว (ปลดแบน)</b>\nกรุณาพิมพ์:\n<code>ไอดี เหตุผล</code>\n(เช่น 123456789 ขอโอกาส)', {
       parse_mode: 'HTML', reply_markup: { force_reply: true }
     });
   } else if (query.data === 'cmd_announce') {
-    bot.sendMessage(chatId, '📢 <b>โหมดประกาศลงกลุ่ม</b>\nกรุณาพิมพ์ข้อความที่คุณต้องการให้บอทประกาศลงในกลุ่มหลัก:', {
+    bot.sendMessage(chatId, '📢 <b>โหมดประกาศ</b>\nพิมพ์ข้อความที่ต้องการให้ยานแม่ประกาศลงกลุ่ม:', {
       parse_mode: 'HTML', reply_markup: { force_reply: true }
     });
   }
   
-  // ส่งสัญญาณให้ Telegram รู้ว่ากดปุ่มแล้ว
   bot.answerCallbackQuery(query.id);
 });
 
 // ==========================================
-// 3. จัดการข้อความที่คุณพิมพ์ส่งกลับมา (หลังกดปุ่ม)
+// 3. ดักจับข้อความ (รับเฉพาะตอนคุณ Reply ตอบบอทเท่านั้น)
 // ==========================================
 bot.on('message', async (msg) => {
   if (msg.from.id !== MY_USER_ID) return;
   if (!msg.text) return;
   if (msg.text.startsWith('/start')) return;
 
-  // ตรวจสอบว่าคุณพิมพ์ตอบกลับ (Reply) ข้อความจากระบบปุ่มกดหรือไม่
+  // ตรวจสอบว่าคุณพิมพ์ตอบกลับ (Reply) จากช่องที่เด้งขึ้นมาหรือไม่
   if (msg.reply_to_message && msg.reply_to_message.text) {
      const promptText = msg.reply_to_message.text;
      
-     // ถ้าตอบกลับในโหมด "แบน"
-     if (promptText.includes('โหมดแบนผู้ใช้')) {
+     if (promptText.includes('โหมดจับกุม (แบน)')) {
        const args = msg.text.split(' ');
        const targetUserId = args[0];
-       const reason = args.slice(1).join(' ') || 'ไม่ระบุสาเหตุ';
+       const reason = args.slice(1).join(' ') || 'คำสั่งจากยานแม่';
        await executeBan(targetUserId, reason, msg.chat.id);
        return;
      }
      
-     // ถ้าตอบกลับในโหมด "ปลดแบน"
-     if (promptText.includes('โหมดปลดแบนผู้ใช้')) {
+     if (promptText.includes('โหมดปล่อยตัว (ปลดแบน)')) {
        const args = msg.text.split(' ');
        const targetUserId = args[0];
-       const reason = args.slice(1).join(' ') || 'ไม่ระบุสาเหตุ';
+       const reason = args.slice(1).join(' ') || 'ความเมตตาจากยานแม่';
        await executeUnban(targetUserId, reason, msg.chat.id);
        return;
      }
      
-     // ถ้าตอบกลับในโหมด "ประกาศ"
-     if (promptText.includes('โหมดประกาศลงกลุ่ม')) {
+     if (promptText.includes('โหมดประกาศ')) {
        try {
-         await bot.sendMessage(TARGET_GROUP_ID, `📢 <b>ประกาศจากแอดมิน:</b>\n\n${msg.text}`, { parse_mode: 'HTML' });
-         // ส่งรายงานประกาศลง Channel Log ด้วยเพื่อเป็นหลักฐาน
-         await bot.sendMessage(LOG_CHANNEL_ID, `📜 <b>[ SYSTEM LOG - ANNOUNCEMENT ]</b>\nแอดมินส่งประกาศลงกลุ่ม:\n\n${msg.text}`, { parse_mode: 'HTML' });
+         await bot.sendMessage(TARGET_GROUP_ID, `📢 <b>ประกาศจากยานแม่ Alian Attack:</b>\n\n${msg.text}`, { parse_mode: 'HTML' });
+         await bot.sendMessage(LOG_CHANNEL_ID, `📜 <b>[ SYSTEM LOG - ANNOUNCEMENT ]</b>\nยานแม่ส่งประกาศลงกลุ่ม:\n\n${msg.text}`, { parse_mode: 'HTML' });
          bot.sendMessage(msg.chat.id, '✅ ส่งข้อความประกาศลงกลุ่มหลักเรียบร้อยครับ');
        } catch (e) {
          bot.sendMessage(msg.chat.id, `❌ ส่งประกาศไม่สำเร็จ:\n<code>${e.message}</code>`, { parse_mode: 'HTML' });
@@ -173,16 +171,9 @@ bot.on('message', async (msg) => {
        return;
      }
   }
-
-  // (ตัวสำรอง) เผื่อคุณยังชินกับการพิมพ์ /ban ตรงๆ แบบเดิมก็ยังใช้งานได้ครับ
-  if (msg.text.startsWith('/ban ') || msg.text.startsWith('/unban ')) {
-    const args = msg.text.split(' ');
-    const command = args[0];
-    const targetUserId = args[1];
-    const reason = args.slice(2).join(' ') || 'ไม่ระบุสาเหตุ';
-    if (command === '/ban') await executeBan(targetUserId, reason, msg.chat.id);
-    else if (command === '/unban') await executeUnban(targetUserId, reason, msg.chat.id);
-  }
+  
+  // ⛔ โค้ดเดิมที่รับคำสั่ง /ban หรือ /unban ตรงๆ ถูกลบทิ้งหมดแล้ว
+  // ทำให้บอทตัวนี้จะไม่ทำงานทับซ้อนกับ GroupHelp แน่นอนครับ!
 });
 
 // เปิดพอร์ตให้ Render ตรวจสอบว่าบอทไม่ตาย
