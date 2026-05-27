@@ -74,6 +74,76 @@ function buildWarnBar(current, max) {
 }
 
 // ==========================================
+// 🔧 ฟังก์ชัน parse ลิงก์ Telegram → { chatId, messageId }
+// รองรับ: https://t.me/c/CHATID/MSGID และ https://t.me/USERNAME/MSGID
+// ==========================================
+function parseTelegramLink(url) {
+  const trimmed = url.trim();
+  if (!trimmed.startsWith('https://t.me/')) return null;
+  if (trimmed.includes('/c/')) {
+    const parts = trimmed.split('/');
+    const msgId = parseInt(parts.pop());
+    const chatIdStr = parts.pop();
+    if (isNaN(msgId) || !chatIdStr) return null;
+    return { chatId: parseInt('-100' + chatIdStr), messageId: msgId };
+  } else {
+    const parts = trimmed.split('/');
+    const msgId = parseInt(parts.pop());
+    const username = parts.pop();
+    if (isNaN(msgId) || !username) return null;
+    return { chatId: '@' + username, messageId: msgId };
+  }
+}
+
+// ==========================================
+// 🔧 ฟังก์ชัน resolve เป้าหมาย → { userId, name, error }
+// รองรับ: @username | ตัวเลข ID | ลิงก์ https://t.me/c/...
+// ==========================================
+async function resolveTarget(input, bot) {
+  const trimmed = input.trim();
+
+  // --- รูปแบบ ลิงก์ t.me ---
+  if (trimmed.startsWith('https://t.me/')) {
+    const parsed = parseTelegramLink(trimmed);
+    if (!parsed) return { error: '❌ <b>รูปแบบลิงก์ไม่ถูกต้อง</b>\nตัวอย่างที่ถูกต้อง: <code>https://t.me/c/2802866220/76235</code>' };
+    try {
+      apiCounter += 2;
+      const fwdMsg = await bot.forwardMessage(parsed.chatId, parsed.chatId, parsed.messageId);
+      const userId = fwdMsg.forward_from ? fwdMsg.forward_from.id : null;
+      const firstName = fwdMsg.forward_from ? (fwdMsg.forward_from.first_name || '') : '';
+      const lastName = fwdMsg.forward_from ? (fwdMsg.forward_from.last_name || '') : '';
+      const name = `${firstName} ${lastName}`.trim() || 'ไม่ระบุชื่อ';
+      // ลบข้อความที่ forward มาเพื่อไม่ให้ล้นกลุ่ม
+      apiCounter++;
+      bot.deleteMessage(parsed.chatId, fwdMsg.message_id).catch(() => {});
+      if (!userId) return { error: '❌ <b>ไม่สามารถดึงข้อมูลเจ้าของข้อความได้</b>\nข้อความนั้นอาจซ่อน forward privacy หรือเป็นบอท' };
+      return { userId, name };
+    } catch (e) {
+      // fallback: ลองดึง userId จาก usernameCache ด้วย chatId ที่รู้
+      return { error: `❌ <b>ดึงข้อมูลจากลิงก์ไม่สำเร็จ:</b>\n<code>${e.message}</code>\n💡 <i>หากผู้ใช้เปิด Forward Privacy ให้ใช้ @username หรือ ID แทน</i>` };
+    }
+  }
+
+  // --- รูปแบบ @username ---
+  if (trimmed.startsWith('@')) {
+    const key = trimmed.replace('@', '').toLowerCase();
+    if (usernameCache[key]) return { userId: usernameCache[key].id, name: usernameCache[key].name };
+    return { error: `❌ <b>สแกนดีเอ็นเอล้มเหลว:</b> ไม่พบรหัส ID ของ <code>${trimmed}</code> ในหน่วยความจำยานแม่\n💡 <i>แนะนำ: ให้เป้าหมายส่งข้อความในกลุ่มก่อน หรือวางลิงก์ข้อความของเขาแทน</i>` };
+  }
+
+  // --- รูปแบบ ตัวเลข ID ---
+  const userId = parseInt(trimmed);
+  if (isNaN(userId)) {
+    return { error: '❌ <b>รูปแบบไม่ถูกต้อง</b>\nรองรับ: <code>@username</code> | <code>รหัส ID</code> | <code>https://t.me/c/CHATID/MSGID</code>' };
+  }
+  let name = 'ไม่ระบุชื่อ';
+  for (const key in usernameCache) {
+    if (usernameCache[key].id === userId) { name = usernameCache[key].name; break; }
+  }
+  return { userId, name };
+}
+
+// ==========================================
 // 1. เมนูหลัก Command Center (ระบบ Inline Keyboard)
 // ==========================================
 function sendMainMenu(chatId) {
@@ -208,23 +278,23 @@ bot.on('callback_query', async (query) => {
     const groupId = parts[2];
     
     if (action === 'ban') {
-      bot.sendMessage(chatId, `🔴 <b>[VAPORIZE PROTOCOL] พิกัดเซกเตอร์:</b> <code>${groupId}</code>\nส่งคำสั่งระบุเหยื่อที่จะล้างบาง:\nรูปแบบ: <code>@username เหตุผล</code> หรือ <code>รหัสเลขID เหตุผล</code>`, {
+      bot.sendMessage(chatId, `🔴 <b>[VAPORIZE PROTOCOL] พิกัดเซกเตอร์:</b> <code>${groupId}</code>\nส่งคำสั่งระบุเหยื่อที่จะล้างบาง:\n• <code>@username เหตุผล</code>\n• <code>รหัสเลขID เหตุผล</code>\n• <code>https://t.me/c/CHATID/MSGID เหตุผล</code>`, {
         parse_mode: 'HTML', reply_markup: { force_reply: true }
       });
     } else if (action === 'unban') {
-      bot.sendMessage(chatId, `🟢 <b>[REANIMATE PROTOCOL] พิกัดเซกเตอร์:</b> <code>${groupId}</code>\nส่งคำสั่งระบุดีเอ็นเอที่จะชุบชีวิตกลับมา:\nรูปแบบ: <code>@username เหตุผล</code> หรือ <code>รหัสเลขID เหตุผล</code>`, {
+      bot.sendMessage(chatId, `🟢 <b>[REANIMATE PROTOCOL] พิกัดเซกเตอร์:</b> <code>${groupId}</code>\nส่งคำสั่งระบุดีเอ็นเอที่จะชุบชีวิตกลับมา:\n• <code>@username เหตุผล</code>\n• <code>รหัสเลขID เหตุผล</code>\n• <code>https://t.me/c/CHATID/MSGID เหตุผล</code>`, {
         parse_mode: 'HTML', reply_markup: { force_reply: true }
       });
     } else if (action === 'warn') {
-      bot.sendMessage(chatId, `☢️ <b>[RADIATION INJECTION PROTOCOL] พิกัดเซกเตอร์:</b> <code>${groupId}</code>\nระบุเป้าหมายที่จะฉีดรังสีพิษ (ครบ ${WARN_LIMIT} ครั้ง = แบนอัตโนมัติ):\nรูปแบบ: <code>@username เหตุผล</code> หรือ <code>รหัสเลขID เหตุผล</code>`, {
+      bot.sendMessage(chatId, `☢️ <b>[RADIATION INJECTION PROTOCOL] พิกัดเซกเตอร์:</b> <code>${groupId}</code>\nระบุเป้าหมายที่จะฉีดรังสีพิษ (ครบ ${WARN_LIMIT} ครั้ง = แบนอัตโนมัติ):\n• <code>@username เหตุผล</code>\n• <code>รหัสเลขID เหตุผล</code>\n• <code>https://t.me/c/CHATID/MSGID เหตุผล</code>`, {
         parse_mode: 'HTML', reply_markup: { force_reply: true }
       });
     } else if (action === 'unwarn') {
-      bot.sendMessage(chatId, `🧬 <b>[DNA DETOX PROTOCOL] พิกัดเซกเตอร์:</b> <code>${groupId}</code>\nระบุเป้าหมายที่จะถอนรังสีพิษออก 1 ครั้ง:\nรูปแบบ: <code>@username เหตุผล</code> หรือ <code>รหัสเลขID เหตุผล</code>`, {
+      bot.sendMessage(chatId, `🧬 <b>[DNA DETOX PROTOCOL] พิกัดเซกเตอร์:</b> <code>${groupId}</code>\nระบุเป้าหมายที่จะถอนรังสีพิษออก 1 ครั้ง:\n• <code>@username เหตุผล</code>\n• <code>รหัสเลขID เหตุผล</code>\n• <code>https://t.me/c/CHATID/MSGID เหตุผล</code>`, {
         parse_mode: 'HTML', reply_markup: { force_reply: true }
       });
     } else if (action === 'warncheck') {
-      bot.sendMessage(chatId, `🔬 <b>[RADIATION SCANNER] พิกัดเซกเตอร์:</b> <code>${groupId}</code>\nระบุเป้าหมายที่ต้องการสแกนระดับรังสีสะสม:\nรูปแบบ: <code>@username</code> หรือ <code>รหัสเลขID</code>`, {
+      bot.sendMessage(chatId, `🔬 <b>[RADIATION SCANNER] พิกัดเซกเตอร์:</b> <code>${groupId}</code>\nระบุเป้าหมายที่ต้องการสแกนระดับรังสีสะสม:\n• <code>@username</code>\n• <code>รหัสเลขID</code>\n• <code>https://t.me/c/CHATID/MSGID</code>`, {
         parse_mode: 'HTML', reply_markup: { force_reply: true }
       });
     } else if (action === 'ann') {
@@ -310,35 +380,14 @@ bot.on('message', async (msg) => {
       if (!msg.text) return;
       apiCounter++;
 
-      const args = msg.text.split(' ');
-      const targetInput = args[0];
-      const reason = args.slice(1).join(' ') || 'ตรวจพบพฤติกรรมเบี่ยงเบนจากโปรโตคอลกองทัพเอเลี่ยน';
+      const spaceIdx = msg.text.trim().indexOf(' ');
+      const targetInput = spaceIdx === -1 ? msg.text.trim() : msg.text.trim().substring(0, spaceIdx);
+      const reason = spaceIdx === -1 ? 'ตรวจพบพฤติกรรมเบี่ยงเบนจากโปรโตคอลกองทัพเอเลี่ยน' : msg.text.trim().substring(spaceIdx + 1).trim() || 'ตรวจพบพฤติกรรมเบี่ยงเบนจากโปรโตคอลกองทัพเอเลี่ยน';
 
-      let targetUserId;
-      let targetName = "สิ่งมีชีวิตไม่ระบุชื่อ";
-
-      if (targetInput.startsWith('@')) {
-        const usernameKey = targetInput.replace('@', '').toLowerCase();
-        if (usernameCache[usernameKey]) {
-          targetUserId = usernameCache[usernameKey].id;
-          targetName = usernameCache[usernameKey].name;
-        } else {
-          apiCounter++;
-          return bot.sendMessage(msg.chat.id, `❌ <b>สแกนดีเอ็นเอล้มเหลว:</b> ไม่พบรหัส ID ของ <code>${targetInput}</code> ในหน่วยความจำยานแม่\n💡 <i>แนะนำ: ให้เป้าหมายส่งข้อความในกลุ่มก่อน หรือใส่รหัสตัวเลข ID แทน</i>`, { parse_mode: 'HTML' });
-        }
-      } else {
-        targetUserId = parseInt(targetInput);
-        if (isNaN(targetUserId)) {
-          apiCounter++;
-          return bot.sendMessage(msg.chat.id, '❌ <b>รหัสไม่ถูกต้อง:</b> โปรดระบุ @username หรือรหัสตัวเลข ID เท่านั้น', { parse_mode: 'HTML' });
-        }
-        for (const key in usernameCache) {
-          if (usernameCache[key].id === targetUserId) {
-            targetName = usernameCache[key].name;
-            break;
-          }
-        }
-      }
+      const resolved = await resolveTarget(targetInput, bot);
+      if (resolved.error) { apiCounter++; return bot.sendMessage(msg.chat.id, resolved.error, { parse_mode: 'HTML' }); }
+      let targetUserId = resolved.userId;
+      let targetName = resolved.name;
 
       try {
         const currentWarn = addWarn(targetGroupId, targetUserId);
@@ -396,35 +445,14 @@ bot.on('message', async (msg) => {
       if (!msg.text) return;
       apiCounter++;
 
-      const args = msg.text.split(' ');
-      const targetInput = args[0];
-      const reason = args.slice(1).join(' ') || 'ได้รับการล้างพิษจากศูนย์ควบคุมยานแม่';
+      const spaceIdx = msg.text.trim().indexOf(' ');
+      const targetInput = spaceIdx === -1 ? msg.text.trim() : msg.text.trim().substring(0, spaceIdx);
+      const reason = spaceIdx === -1 ? 'ได้รับการล้างพิษจากศูนย์ควบคุมยานแม่' : msg.text.trim().substring(spaceIdx + 1).trim() || 'ได้รับการล้างพิษจากศูนย์ควบคุมยานแม่';
 
-      let targetUserId;
-      let targetName = "สิ่งมีชีวิตไม่ระบุชื่อ";
-
-      if (targetInput.startsWith('@')) {
-        const usernameKey = targetInput.replace('@', '').toLowerCase();
-        if (usernameCache[usernameKey]) {
-          targetUserId = usernameCache[usernameKey].id;
-          targetName = usernameCache[usernameKey].name;
-        } else {
-          apiCounter++;
-          return bot.sendMessage(msg.chat.id, `❌ <b>สแกนดีเอ็นเอล้มเหลว:</b> ไม่พบรหัส ID ของ <code>${targetInput}</code> ในหน่วยความจำยานแม่`, { parse_mode: 'HTML' });
-        }
-      } else {
-        targetUserId = parseInt(targetInput);
-        if (isNaN(targetUserId)) {
-          apiCounter++;
-          return bot.sendMessage(msg.chat.id, '❌ <b>รหัสไม่ถูกต้อง:</b> โปรดระบุ @username หรือรหัสตัวเลข ID เท่านั้น', { parse_mode: 'HTML' });
-        }
-        for (const key in usernameCache) {
-          if (usernameCache[key].id === targetUserId) {
-            targetName = usernameCache[key].name;
-            break;
-          }
-        }
-      }
+      const resolved = await resolveTarget(targetInput, bot);
+      if (resolved.error) { apiCounter++; return bot.sendMessage(msg.chat.id, resolved.error, { parse_mode: 'HTML' }); }
+      let targetUserId = resolved.userId;
+      let targetName = resolved.name;
 
       const prevWarn = getWarnCount(targetGroupId, targetUserId);
       if (prevWarn === 0) {
@@ -464,31 +492,11 @@ bot.on('message', async (msg) => {
       apiCounter++;
 
       const targetInput = msg.text.trim().split(' ')[0];
-      let targetUserId;
-      let targetName = "สิ่งมีชีวิตไม่ระบุชื่อ";
 
-      if (targetInput.startsWith('@')) {
-        const usernameKey = targetInput.replace('@', '').toLowerCase();
-        if (usernameCache[usernameKey]) {
-          targetUserId = usernameCache[usernameKey].id;
-          targetName = usernameCache[usernameKey].name;
-        } else {
-          apiCounter++;
-          return bot.sendMessage(msg.chat.id, `❌ <b>สแกนดีเอ็นเอล้มเหลว:</b> ไม่พบรหัส ID ของ <code>${targetInput}</code>`, { parse_mode: 'HTML' });
-        }
-      } else {
-        targetUserId = parseInt(targetInput);
-        if (isNaN(targetUserId)) {
-          apiCounter++;
-          return bot.sendMessage(msg.chat.id, '❌ <b>รหัสไม่ถูกต้อง:</b> โปรดระบุ @username หรือรหัสตัวเลข ID', { parse_mode: 'HTML' });
-        }
-        for (const key in usernameCache) {
-          if (usernameCache[key].id === targetUserId) {
-            targetName = usernameCache[key].name;
-            break;
-          }
-        }
-      }
+      const resolved = await resolveTarget(targetInput, bot);
+      if (resolved.error) { apiCounter++; return bot.sendMessage(msg.chat.id, resolved.error, { parse_mode: 'HTML' }); }
+      let targetUserId = resolved.userId;
+      let targetName = resolved.name;
 
       apiCounter++;
       const currentWarn = getWarnCount(targetGroupId, targetUserId);
@@ -553,36 +561,15 @@ bot.on('message', async (msg) => {
     if (promptText.includes('[VAPORIZE PROTOCOL]')) {
       if (!msg.text) return;
       apiCounter++;
-      
-      const args = msg.text.split(' ');
-      const targetInput = args[0];
-      const reason = args.slice(1).join(' ') || 'ตรวจพบการขัดขวางและต่อต้านกองทัพเอเลี่ยน';
-      
-      let targetUserId;
-      let targetName = "สิ่งมีชีวิตไม่ระบุชื่อ (Unknown Biomass)";
 
-      if (targetInput.startsWith('@')) {
-        const usernameKey = targetInput.replace('@', '').toLowerCase();
-        if (usernameCache[usernameKey]) {
-          targetUserId = usernameCache[usernameKey].id;
-          targetName = usernameCache[usernameKey].name;
-        } else {
-          apiCounter++;
-          return bot.sendMessage(msg.chat.id, `❌ <b>ค้นหาเป้าหมายล้มเหลว:</b> ไม่พบข้อมูลรหัส ID สำหรับ <code>${targetInput}</code> ในหน่วยความจำบอท\n💡 <i>แนะนำ: ให้บุคคลคนนั้นส่งข้อความในกลุ่มแอดมินสักครั้งเพื่อให้บอทสแกนดีเอ็นเอ หรือเปลี่ยนไปใส่ตัวเลข ID ของผู้ใช้แทน</i>`, { parse_mode: 'HTML' });
-        }
-      } else {
-        targetUserId = parseInt(targetInput);
-        if (isNaN(targetUserId)) {
-          apiCounter++;
-          return bot.sendMessage(msg.chat.id, '❌ <b>รหัสไม่ถูกต้อง:</b> โปรดระบุข้อมูลเป็นข้อความแบบ @username หรือรหัสตัวเลข ID เท่านั้น', { parse_mode: 'HTML' });
-        }
-        for (const key in usernameCache) {
-          if (usernameCache[key].id === targetUserId) {
-            targetName = usernameCache[key].name;
-            break;
-          }
-        }
-      }
+      const spaceIdx = msg.text.trim().indexOf(' ');
+      const targetInput = spaceIdx === -1 ? msg.text.trim() : msg.text.trim().substring(0, spaceIdx);
+      const reason = spaceIdx === -1 ? 'ตรวจพบการขัดขวางและต่อต้านกองทัพเอเลี่ยน' : msg.text.trim().substring(spaceIdx + 1).trim() || 'ตรวจพบการขัดขวางและต่อต้านกองทัพเอเลี่ยน';
+
+      const resolved = await resolveTarget(targetInput, bot);
+      if (resolved.error) { apiCounter++; return bot.sendMessage(msg.chat.id, resolved.error, { parse_mode: 'HTML' }); }
+      let targetUserId = resolved.userId;
+      let targetName = resolved.name;
 
       try {
         apiCounter += 2;
@@ -612,36 +599,15 @@ bot.on('message', async (msg) => {
     if (promptText.includes('[REANIMATE PROTOCOL]')) {
       if (!msg.text) return;
       apiCounter++;
-      
-      const args = msg.text.split(' ');
-      const targetInput = args[0];
-      const reason = args.slice(1).join(' ') || 'ได้รับการอภัยโทษสูงสุดจากยานแม่เอเลี่ยน';
-      
-      let targetUserId;
-      let targetName = "สิ่งมีชีวิตกู้คืนโครงสร้าง";
 
-      if (targetInput.startsWith('@')) {
-        const usernameKey = targetInput.replace('@', '').toLowerCase();
-        if (usernameCache[usernameKey]) {
-          targetUserId = usernameCache[usernameKey].id;
-          targetName = usernameCache[usernameKey].name;
-        } else {
-          apiCounter++;
-          return bot.sendMessage(msg.chat.id, `❌ <b>ค้นหาเป้าหมายล้มเหลว:</b> ไม่พบข้อมูลรหัส ID สำหรับ <code>${targetInput}</code> ในหน่วยความจำชั่วคราว`, { parse_mode: 'HTML' });
-        }
-      } else {
-        targetUserId = parseInt(targetInput);
-        if (isNaN(targetUserId)) {
-          apiCounter++;
-          return bot.sendMessage(msg.chat.id, '❌ <b>รหัสไม่ถูกต้อง:</b> โปรดระบุข้อมูลเป็นข้อความแบบ @username หรือรหัสตัวเลข ID เท่านั้น', { parse_mode: 'HTML' });
-        }
-        for (const key in usernameCache) {
-          if (usernameCache[key].id === targetUserId) {
-            targetName = usernameCache[key].name;
-            break;
-          }
-        }
-      }
+      const spaceIdx = msg.text.trim().indexOf(' ');
+      const targetInput = spaceIdx === -1 ? msg.text.trim() : msg.text.trim().substring(0, spaceIdx);
+      const reason = spaceIdx === -1 ? 'ได้รับการอภัยโทษสูงสุดจากยานแม่เอเลี่ยน' : msg.text.trim().substring(spaceIdx + 1).trim() || 'ได้รับการอภัยโทษสูงสุดจากยานแม่เอเลี่ยน';
+
+      const resolved = await resolveTarget(targetInput, bot);
+      if (resolved.error) { apiCounter++; return bot.sendMessage(msg.chat.id, resolved.error, { parse_mode: 'HTML' }); }
+      let targetUserId = resolved.userId;
+      let targetName = resolved.name;
 
       try {
         apiCounter += 2;
