@@ -16,6 +16,9 @@ const WARN_LIMIT = 2;
 let apiCounter = 0;
 const API_DAILY_MAX = 50000;
 
+// 🗂️ Session Storage สำหรับติดตามสถานะการพิมพ์ของ Operator
+const monitorSessions = new Map();
+
 // 📅 ระบบ Persistent Daily Storage (รีเซตรายวัน ไม่รีเซตตอน restart)
 const fs = require('fs');
 const STORAGE_FILE = './daily_data.json';
@@ -103,7 +106,7 @@ const bot = new TelegramBot(token, { polling: true });
 console.log(`🛸 Alien Invasion Engine Active! Overlords: ${WHITELIST_IDS.length} | Target Sectors: ${TARGET_GROUPS.length}`);
 
 // ==========================================
-// 🔧 ฟังก์ชันช่วยระบบ Warn
+// 🔧 ฟังก์ชันช่วยระบบ Warn & Utilities
 // ==========================================
 function getWarnCount(groupId, userId) {
   if (!warnData[groupId]) warnData[groupId] = {};
@@ -132,21 +135,13 @@ function buildWarnBar(current, max) {
   return '☢️'.repeat(filled) + '⬜'.repeat(max - filled);
 }
 
-// ==========================================
-// 🔧 ฟังก์ชัน resolve เป้าหมาย → { userId, name, error }
-// รองรับ: @username | ตัวเลข ID
-// ==========================================
 function resolveTarget(input) {
   const trimmed = input.trim();
-
-  // --- รูปแบบ @username ---
   if (trimmed.startsWith('@')) {
     const key = trimmed.replace('@', '').toLowerCase();
     if (usernameCache[key]) return { userId: usernameCache[key].id, name: usernameCache[key].name };
     return { error: `❌ ไม่พบ ID ของ <code>${trimmed}</code> ในระบบ\n💡 ให้เป้าหมายส่งข้อความในกลุ่มก่อน หรือใส่ตัวเลข ID แทน` };
   }
-
-  // --- รูปแบบ ตัวเลข ID ---
   const userId = parseInt(trimmed);
   if (isNaN(userId)) {
     return { error: '❌ รูปแบบไม่ถูกต้อง ใช้ <code>@username</code> หรือ <code>ตัวเลข ID</code>' };
@@ -155,18 +150,14 @@ function resolveTarget(input) {
   for (const key in usernameCache) {
     if (usernameCache[key].id === userId) { name = usernameCache[key].name; break; }
   }
-  return { userId, name }; // name อาจเป็น null → จะดึงจาก Telegram ทีหลัง
+  return { userId, name };
 }
 
-// ดึงชื่อจาก cache หรือ Telegram API (fallback)
 async function resolveName(userId, groupId) {
-  // ค้นหาจาก id key ก่อน
   if (usernameCache[`id_${userId}`]) return usernameCache[`id_${userId}`].name;
-  // ค้นหาจาก username key
   for (const key in usernameCache) {
     if (usernameCache[key].id === userId) return usernameCache[key].name;
   }
-  // fallback: ดึงจาก Telegram API
   try {
     apiCounter++;
     const member = await bot.getChatMember(groupId, userId);
@@ -181,9 +172,9 @@ async function resolveName(userId, groupId) {
 }
 
 // ==========================================
-// 1. เมนูหลัก Command Center (ระบบ Inline Keyboard)
+// 1. เมนูหลัก Command Center
 // ==========================================
-function sendMainMenu(chatId) {
+function sendMainMenu(chatId, messageId = null) {
   apiCounter++;
   const keyboard = TARGET_GROUPS.map(g => [
     { text: `🛰️ เซกเตอร์: ${g.name}`, callback_data: `select_group_${g.id}` }
@@ -194,19 +185,60 @@ function sendMainMenu(chatId) {
     { text: `👥 รายชื่อ Whitelist`, callback_data: `view_whitelist` }
   ]);
 
-  bot.sendMessage(chatId, "🛸 <b>แผงควบคุมหลัก: กองทัพเอเลี่ยนต่างดาว (Alien Attack Machine)</b>\nยินดีต้อนรับท่านผู้บัญชาการ โปรดเลือกเซกเตอร์ดาวเทียมที่ต้องการเข้าควบคุม:", {
+  const text = "🛸 <b>แผงควบคุมหลัก: กองทัพเอเลี่ยนต่างดาว (Alien Attack Machine)</b>\nยินดีต้อนรับท่านผู้บัญชาการ โปรดเลือกเซกเตอร์ดาวเทียมที่ต้องการเข้าควบคุม:";
+  const options = { parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard } };
+
+  if (messageId) {
+    bot.editMessageText(text, { chat_id: chatId, message_id: messageId, ...options }).catch(()=>{});
+  } else {
+    bot.sendMessage(chatId, text, options);
+  }
+}
+
+function restoreSubmenu(chatId, messageId, groupId) {
+  const group = TARGET_GROUPS.find(g => g.id == groupId);
+  if (!group) return;
+
+  const submenu = [
+    [
+      { text: '🔴 ล้างบางเผ่าพันธุ์ (Ban)', callback_data: `opt_ban_${groupId}` },
+      { text: '🟢 ชุบชีวิตเนื้อเยื่อ (Unban)', callback_data: `opt_unban_${groupId}` }
+    ],
+    [
+      { text: '☢️ ฉีดรังสีพิษ (Warn)', callback_data: `opt_warn_${groupId}` },
+      { text: '🧬 ล้างพิษดีเอ็นเอ (Unwarn)', callback_data: `opt_unwarn_${groupId}` }
+    ],
+    [
+      { text: '🔬 สแกนระดับรังสี (Warn Status)', callback_data: `opt_warncheck_${groupId}` }
+    ],
+    [
+      { text: '🧲 ดูดสื่อไร้ร่องรอย (Stealth)', callback_data: `cmd_capture_url_${groupId}` },
+      { text: '📡 ยิงคลื่นประกาศ (Transmit)', callback_data: `opt_ann_${groupId}` }
+    ],
+    [
+      { text: '💬 ตอบกลับด้วยลิงก์ (Reply Link)', callback_data: `opt_replylink_${groupId}` }
+    ],
+    [
+      { text: '⬅️ กลับสู่แผงควบคุมหลัก', callback_data: 'back_to_main' }
+    ]
+  ];
+
+  bot.editMessageText(`🛰️ <b>พิกัดเซกเตอร์ที่ล็อกไว้:</b> <code>${group.name}</code>\nโปรดเลือกคำสั่งโปรโตคอลการโจมตีหรือดูดกลืนข้อมูล:`, {
+    chat_id: chatId,
+    message_id: messageId,
     parse_mode: 'HTML',
-    reply_markup: { inline_keyboard: keyboard }
-  });
+    reply_markup: { inline_keyboard: submenu }
+  }).catch(()=>{});
 }
 
 bot.onText(/\/start/, (msg) => {
   if (!WHITELIST_IDS.includes(msg.from.id)) return;
+  monitorSessions.delete(msg.from.id); // ล้าง session ถ้าเปิดหน้าใหม่
   sendMainMenu(msg.chat.id);
 });
 
 // ==========================================
-// 2. จัดการปุ่มกด (Inline Keyboard)
+// 2. จัดการปุ่มกด (Inline Keyboard & State Trigger)
 // ==========================================
 bot.on('callback_query', async (query) => {
   if (!WHITELIST_IDS.includes(query.from.id)) {
@@ -218,11 +250,18 @@ bot.on('callback_query', async (query) => {
   const messageId = query.message.message_id;
   const data = query.data;
 
+  // จัดการปุ่มยกเลิก (Cancel Session)
+  if (data.startsWith('cancel_')) {
+    const groupId = data.replace('cancel_', '');
+    monitorSessions.delete(query.from.id);
+    bot.answerCallbackQuery(query.id, { text: 'ยกเลิกคำสั่ง กลับสู่เมนู' });
+    return restoreSubmenu(chatId, messageId, groupId);
+  }
+
   // กลับหน้าหลัก
   if (data === 'back_to_main') {
     apiCounter += 2;
-    bot.deleteMessage(chatId, messageId).catch(() => {});
-    sendMainMenu(chatId);
+    sendMainMenu(chatId, messageId);
     return bot.answerCallbackQuery(query.id);
   }
 
@@ -232,7 +271,6 @@ bot.on('callback_query', async (query) => {
     const pct = Math.min(100, Math.round((apiCounter / API_DAILY_MAX) * 100));
     const bars = Math.round(pct / 10);
     const barStr = "🟩".repeat(bars) + "⬜".repeat(10 - bars);
-    
     await bot.sendMessage(chatId, `📊 <b>เครื่องตรวจวัดพลังงานสัญญาณขีดจำกัด API</b>\n\nหลอดพลังงาน: [<code>${barStr}</code>] ${pct}%\nดึงสัญญาณไปแล้ว: <code>${apiCounter}</code> / <code>${API_DAILY_MAX}</code> ครั้ง\n\n⚠️ <i>คำเตือน: โปรดควบคุมการยิงสัญญานไม่ให้ทะลุ 100% เพื่อป้องกันระบบป้องกันของ Telegram ตรวจจับ</i>`, { parse_mode: 'HTML' });
     return bot.answerCallbackQuery(query.id);
   }
@@ -244,15 +282,11 @@ bot.on('callback_query', async (query) => {
     WHITELIST_IDS.forEach((id, idx) => {
       let name = "ร่างอวตารนิรนาม (ยังไม่พบประวัติพิมพ์ข้อความ)";
       for (const key in usernameCache) {
-        if (usernameCache[key].id === id) {
-          name = usernameCache[key].name;
-          break;
-        }
+        if (usernameCache[key].id === id) { name = usernameCache[key].name; break; }
       }
       whitelistMessage += `${idx + 1}. 🆔 <code>${id}</code> [${name}]\n`;
     });
     whitelistMessage += `━━━━━━━━━━━━━━━━━━━━\n🛸 <i>สิทธิ์ในการสั่งการและแก้ไขชั้นบรรยากาศสูงสุด</i>`;
-    
     await bot.sendMessage(chatId, whitelistMessage, { parse_mode: 'HTML' });
     return bot.answerCallbackQuery(query.id);
   }
@@ -261,97 +295,52 @@ bot.on('callback_query', async (query) => {
   if (data.startsWith('select_group_')) {
     apiCounter += 2;
     const groupId = data.replace('select_group_', '');
-    const group = TARGET_GROUPS.find(g => g.id == groupId);
-    if (!group) return bot.answerCallbackQuery(query.id, { text: 'ไม่พบพิกัดเซกเตอร์เป้าหมายในแผนที่ดวงดาว' });
+    restoreSubmenu(chatId, messageId, groupId);
+    return bot.answerCallbackQuery(query.id);
+  }
 
-    const submenu = [
-      [
-        { text: '🔴 ล้างบางเผ่าพันธุ์ (Ban)', callback_data: `opt_ban_${groupId}` },
-        { text: '🟢 ชุบชีวิตเนื้อเยื่อ (Unban)', callback_data: `opt_unban_${groupId}` }
-      ],
-      [
-        { text: '☢️ ฉีดรังสีพิษ (Warn)', callback_data: `opt_warn_${groupId}` },
-        { text: '🧬 ล้างพิษดีเอ็นเอ (Unwarn)', callback_data: `opt_unwarn_${groupId}` }
-      ],
-      [
-        { text: '🔬 สแกนระดับรังสี (Warn Status)', callback_data: `opt_warncheck_${groupId}` }
-      ],
-      [
-        { text: '🧲 ดูดสื่อไร้ร่องรอย (Stealth)', callback_data: `cmd_capture_url_${groupId}` },
-        { text: '📡 ยิงคลื่นประกาศ (Transmit)', callback_data: `opt_ann_${groupId}` }
-      ],
-      [
-        { text: '💬 ตอบกลับด้วยลิงก์ (Reply Link)', callback_data: `opt_replylink_${groupId}` }
-      ],
-      [
-        { text: '⬅️ กลับสู่แผงควบคุมหลัก', callback_data: 'back_to_main' }
-      ]
-    ];
+  // เข้าสู่โหมด Prompt (เก็บ Session)
+  if (data.startsWith('opt_') || data.startsWith('cmd_capture_url_')) {
+    apiCounter += 2;
+    let action, groupId;
 
-    await bot.editMessageText(`🛰️ <b>พิกัดเซกเตอร์ที่ล็อกไว้:</b> <code>${group.name}</code>\nโปรดเลือกคำสั่งโปรโตคอลการโจมตีหรือดูดกลืนข้อมูล:`, {
+    if (data.startsWith('cmd_capture_url_')) {
+      action = 'capture_url';
+      groupId = data.replace('cmd_capture_url_', '');
+    } else {
+      const parts = data.split('_');
+      action = parts[1];
+      groupId = parts[2];
+    }
+
+    let promptMsg = '';
+    if (action === 'capture_url') promptMsg = `🧲 <b>[QUANTUM TRACTOR BEAM] พิกัดเซกเตอร์:</b> <code>${groupId}</code>\nป้อนลิงก์เป้าหมาย Telegram ลงในเครื่องสแกนชีวภาพ (เช่น https://t.me/c/xxxx/xxxx):`;
+    else if (action === 'ban') promptMsg = `🔴 <b>[VAPORIZE PROTOCOL] พิกัดเซกเตอร์:</b> <code>${groupId}</code>\nส่งคำสั่งระบุเหยื่อที่จะล้างบาง:\nรูปแบบ: <code>@username เหตุผล</code> หรือ <code>รหัสตัวเลข ID เหตุผล</code>`;
+    else if (action === 'unban') promptMsg = `🟢 <b>[REANIMATE PROTOCOL] พิกัดเซกเตอร์:</b> <code>${groupId}</code>\nส่งคำสั่งระบุดีเอ็นเอที่จะชุบชีวิตกลับมา:\nรูปแบบ: <code>@username เหตุผล</code> หรือ <code>รหัสตัวเลข ID เหตุผล</code>`;
+    else if (action === 'warn') promptMsg = `☢️ <b>[RADIATION INJECTION PROTOCOL] พิกัดเซกเตอร์:</b> <code>${groupId}</code>\nระบุเป้าหมายที่จะฉีดรังสีพิษ (ครบ ${WARN_LIMIT} ครั้ง = แบนอัตโนมัติ):\nรูปแบบ: <code>@username เหตุผล</code> หรือ <code>รหัสตัวเลข ID เหตุผล</code>`;
+    else if (action === 'unwarn') promptMsg = `🧬 <b>[DNA DETOX PROTOCOL] พิกัดเซกเตอร์:</b> <code>${groupId}</code>\nระบุเป้าหมายที่จะถอนรังสีพิษออก 1 ครั้ง:\nรูปแบบ: <code>@username เหตุผล</code> หรือ <code>รหัสตัวเลข ID เหตุผล</code>`;
+    else if (action === 'warncheck') promptMsg = `🔬 <b>[RADIATION SCANNER] พิกัดเซกเตอร์:</b> <code>${groupId}</code>\nระบุเป้าหมายที่ต้องการสแกนระดับรังสีสะสม:\nรูปแบบ: <code>@username</code> หรือ <code>รหัสตัวเลข ID</code>`;
+    else if (action === 'ann') promptMsg = `📡 <b>[BEAM TRANSMISSION] พิกัดเซกเตอร์:</b> <code>${groupId}</code>\nส่งไฟล์ภาพ วิดีโอ หรือข้อความ เพื่อฝังตัวเข้าโครงข่ายประสาทของเซกเตอร์แบบเนทีฟ:`;
+    else if (action === 'replylink') promptMsg = `💬 <b>[REPLY LINK PROTOCOL] พิกัดเซกเตอร์:</b> <code>${groupId}</code>\nส่งลิงก์พิกัดข้อความ ตามด้วยข้อความที่จะตอบกลับแบบเนทีฟ\nรูปแบบ: <code>[ลิงก์ข้อความ] [เว้นวรรค] [ข้อความตอบกลับ]</code>\nตัวอย่าง: <code>https://t.me/c/123/456 เปิดระบบสแกนแล้วมนุษย์โลก</code>`;
+
+    // บันทึก Session
+    monitorSessions.set(query.from.id, { chatId, messageId, groupId, action });
+
+    bot.editMessageText(promptMsg, {
       chat_id: chatId,
       message_id: messageId,
       parse_mode: 'HTML',
-      reply_markup: { inline_keyboard: submenu }
+      reply_markup: { inline_keyboard: [[{ text: '❌ ยกเลิกคำสั่ง (Cancel)', callback_data: `cancel_${groupId}` }]] }
     });
     return bot.answerCallbackQuery(query.id);
-  }
-
-  // เรียกโหมดดูดสื่อประจำกลุ่ม (Stealth)
-  if (data.startsWith('cmd_capture_url_')) {
-    apiCounter += 2;
-    const groupId = data.replace('cmd_capture_url_', '');
-    bot.sendMessage(chatId, `🧲 <b>[QUANTUM TRACTOR BEAM] พิกัดเซกเตอร์:</b> <code>${groupId}</code>\nป้อนลิงก์เป้าหมาย Telegram ลงในเครื่องสแกนชีวภาพ (เช่น https://t.me/c/xxxx/xxxx):`, {
-      parse_mode: 'HTML', reply_markup: { force_reply: true }
-    });
-    return bot.answerCallbackQuery(query.id);
-  }
-
-  // Force Reply โหมดต่างๆ
-  if (data.startsWith('opt_')) {
-    apiCounter += 2;
-    const parts = data.split('_');
-    const action = parts[1];
-    const groupId = parts[2];
-    
-    if (action === 'ban') {
-      bot.sendMessage(chatId, `🔴 <b>[VAPORIZE PROTOCOL] พิกัดเซกเตอร์:</b> <code>${groupId}</code>\nส่งคำสั่งระบุเหยื่อที่จะล้างบาง:\nรูปแบบ: <code>@username เหตุผล</code> หรือ <code>รหัสตัวเลข ID เหตุผล</code>`, {
-        parse_mode: 'HTML', reply_markup: { force_reply: true }
-      });
-    } else if (action === 'unban') {
-      bot.sendMessage(chatId, `🟢 <b>[REANIMATE PROTOCOL] พิกัดเซกเตอร์:</b> <code>${groupId}</code>\nส่งคำสั่งระบุดีเอ็นเอที่จะชุบชีวิตกลับมา:\nรูปแบบ: <code>@username เหตุผล</code> หรือ <code>รหัสตัวเลข ID เหตุผล</code>`, {
-        parse_mode: 'HTML', reply_markup: { force_reply: true }
-      });
-    } else if (action === 'warn') {
-      bot.sendMessage(chatId, `☢️ <b>[RADIATION INJECTION PROTOCOL] พิกัดเซกเตอร์:</b> <code>${groupId}</code>\nระบุเป้าหมายที่จะฉีดรังสีพิษ (ครบ ${WARN_LIMIT} ครั้ง = แบนอัตโนมัติ):\nรูปแบบ: <code>@username เหตุผล</code> หรือ <code>รหัสตัวเลข ID เหตุผล</code>`, {
-        parse_mode: 'HTML', reply_markup: { force_reply: true }
-      });
-    } else if (action === 'unwarn') {
-      bot.sendMessage(chatId, `🧬 <b>[DNA DETOX PROTOCOL] พิกัดเซกเตอร์:</b> <code>${groupId}</code>\nระบุเป้าหมายที่จะถอนรังสีพิษออก 1 ครั้ง:\nรูปแบบ: <code>@username เหตุผล</code> หรือ <code>รหัสตัวเลข ID เหตุผล</code>`, {
-        parse_mode: 'HTML', reply_markup: { force_reply: true }
-      });
-    } else if (action === 'warncheck') {
-      bot.sendMessage(chatId, `🔬 <b>[RADIATION SCANNER] พิกัดเซกเตอร์:</b> <code>${groupId}</code>\nระบุเป้าหมายที่ต้องการสแกนระดับรังสีสะสม:\nรูปแบบ: <code>@username</code> หรือ <code>รหัสตัวเลข ID</code>`, {
-        parse_mode: 'HTML', reply_markup: { force_reply: true }
-      });
-    } else if (action === 'ann') {
-      bot.sendMessage(chatId, `📡 <b>[BEAM TRANSMISSION] พิกัดเซกเตอร์:</b> <code>${groupId}</code>\nส่งไฟล์ภาพ วิดีโอ หรือข้อความ เพื่อฝังตัวเข้าโครงข่ายประสาทของเซกเตอร์แบบเนทีฟ:`, {
-        parse_mode: 'HTML', reply_markup: { force_reply: true }
-      });
-    } else if (action === 'replylink') {
-      bot.sendMessage(chatId, `💬 <b>[REPLY LINK PROTOCOL] พิกัดเซกเตอร์:</b> <code>${groupId}</code>\nส่งลิงก์พิกัดข้อความ ตามด้วยข้อความที่จะตอบกลับแบบเนทีฟ\nรูปแบบ: <code>[ลิงก์ข้อความ] [เว้นวรรค] [ข้อความตอบกลับ]</code>\nตัวอย่าง: <code>https://t.me/c/123/456 เปิดระบบสแกนแล้วมนุษย์โลก</code>`, {
-        parse_mode: 'HTML', reply_markup: { force_reply: true }
-      });
-    }
-    bot.answerCallbackQuery(query.id);
   }
 });
 
 // ==========================================
-// 3. ระบบประมวลผลสัญญาณข้อความ
+// 3. ระบบประมวลผลสัญญาณข้อความผ่าน Session
 // ==========================================
 bot.on('message', async (msg) => {
-  // 🛰️ ตรวจสแกนดีเอ็นเอผู้ส่งสารทุกคนในกลุ่ม
+  // 🛰️ ตรวจสแกนดีเอ็นเอผู้ส่งสารทุกคนในกลุ่ม (ทำเสมอเพื่อเก็บ Cache)
   if (msg.from) {
     const fullName = `${msg.from.first_name || ''} ${msg.from.last_name || ''}`.trim() || msg.from.username || `ID:${msg.from.id}`;
     const idKey = `id_${msg.from.id}`;
@@ -365,67 +354,69 @@ bot.on('message', async (msg) => {
   if (!WHITELIST_IDS.includes(msg.from.id)) return;
   if (msg.text && msg.text.startsWith('/start')) return;
 
-  if (msg.reply_to_message && msg.reply_to_message.text) {
-    const promptText = msg.reply_to_message.text;
-    const alienOperatorName = `${msg.from.first_name || ''} ${msg.from.last_name || ''}`.trim() || `@${msg.from.username}` || msg.from.id;
+  // ตรวจสอบว่าผู้ใช้มี Session ค้างอยู่หรือไม่
+  const session = monitorSessions.get(msg.from.id);
+  if (!session) return;
 
+  // อนุญาตให้ผ่านถ้าเป็นข้อความ หรือ action=ann ที่ส่งสื่อได้
+  if (!msg.text && session.action !== 'ann') return;
+
+  const { chatId, messageId, groupId, action } = session;
+  const targetGroupId = parseInt(groupId);
+  const groupObj = TARGET_GROUPS.find(g => g.id === targetGroupId);
+  const groupName = groupObj ? groupObj.name : 'ไม่ระบุกลุ่ม';
+  
+  const inputStr = msg.text ? msg.text.trim() : '';
+
+  // ลบข้อความที่ผู้ใช้พิมพ์เข้ามาเพื่อให้แชทสะอาด
+  bot.deleteMessage(msg.chat.id, msg.message_id).catch(() => {});
+
+  let targetInput = '';
+  let reason = '';
+  let spaceIdx = -1;
+  let resolved, targetUserId, targetName;
+
+  switch (action) {
     // ==========================================
-    // 🧲 โหมดดูดสื่อไร้ร่องรอย (Quantum Tractor Beam)
+    // 🧲 โหมดดูดสื่อไร้ร่องรอย
     // ==========================================
-    if (promptText.includes('[QUANTUM TRACTOR BEAM]')) {
-      if (!msg.text) return;
+    case 'capture_url':
       apiCounter++;
       try {
-        const url = msg.text.trim();
-        let targetChatId;
-        let messageId;
-
-        if (url.includes('/c/')) {
-          const parts = url.split('/');
-          messageId = parseInt(parts.pop());
-          const chatIdStr = parts.pop();
-          targetChatId = parseInt("-100" + chatIdStr);
+        let tChatId, mId;
+        if (inputStr.includes('/c/')) {
+          const parts = inputStr.split('/');
+          mId = parseInt(parts.pop());
+          tChatId = parseInt("-100" + parts.pop());
         } else {
-          const parts = url.split('/');
-          messageId = parseInt(parts.pop());
-          const username = parts.pop();
-          targetChatId = "@" + username;
+          const parts = inputStr.split('/');
+          mId = parseInt(parts.pop());
+          tChatId = "@" + parts.pop();
         }
-
-        if (!targetChatId || isNaN(messageId)) throw new Error("พิกัดคลื่นพอร์ตดวงดาวไม่ถูกต้อง");
-
+        if (!tChatId || isNaN(mId)) throw new Error("พิกัดคลื่นพอร์ตดวงดาวไม่ถูกต้อง");
+        
         apiCounter += 2;
-        await bot.copyMessage(msg.from.id, targetChatId, messageId);
+        await bot.copyMessage(msg.from.id, tChatId, mId);
         bot.sendMessage(msg.from.id, '🛸 ดึงสื่อสำเร็จ ส่งเข้าแชทส่วนตัวแล้ว', { parse_mode: 'HTML' });
       } catch (e) {
         apiCounter++;
         bot.sendMessage(msg.from.id, `❌ ดึงสื่อไม่สำเร็จ: <code>${e.message}</code>`, { parse_mode: 'HTML' });
       }
-      return;
-    }
-
-    // --- ระบบตรวจสอบ ID กลุ่มสำหรับการกระทำอื่นๆ ---
-    const matchGroup = promptText.match(/พิกัดเซกเตอร์:\s*(-?\d+)/);
-    if (!matchGroup) return;
-    const targetGroupId = parseInt(matchGroup[1]);
-    const groupObj = TARGET_GROUPS.find(g => g.id === targetGroupId);
-    const groupName = groupObj ? groupObj.name : 'ไม่ระบุกลุ่ม';
+      break;
 
     // ==========================================
-    // ☢️ โหมดฉีดรังสีพิษ (Radiation Injection / Warn)
+    // ☢️ โหมดฉีดรังสีพิษ
     // ==========================================
-    if (promptText.includes('[RADIATION INJECTION PROTOCOL]')) {
-      if (!msg.text) return;
+    case 'warn':
       apiCounter++;
+      spaceIdx = inputStr.indexOf(' ');
+      targetInput = spaceIdx === -1 ? inputStr : inputStr.substring(0, spaceIdx);
+      reason = spaceIdx === -1 ? 'ตรวจพบพฤติกรรมเบี่ยงเบนจากโปรโตคอลกองทัพเอเลี่ยน' : inputStr.substring(spaceIdx + 1).trim() || 'ตรวจพบพฤติกรรมเบี่ยงเบนจากโปรโตคอลกองทัพเอเลี่ยน';
 
-      const spaceIdx = msg.text.trim().indexOf(' ');
-      const targetInput = spaceIdx === -1 ? msg.text.trim() : msg.text.trim().substring(0, spaceIdx);
-      const reason = spaceIdx === -1 ? 'ตรวจพบพฤติกรรมเบี่ยงเบนจากโปรโตคอลกองทัพเอเลี่ยน' : msg.text.trim().substring(spaceIdx + 1).trim() || 'ตรวจพบพฤติกรรมเบี่ยงเบนจากโปรโตคอลกองทัพเอเลี่ยน';
-
-      const resolved = resolveTarget(targetInput);
-      if (resolved.error) { apiCounter++; return bot.sendMessage(msg.chat.id, resolved.error, { parse_mode: 'HTML' }); }
-      let targetUserId = resolved.userId;
-      let targetName = resolved.name || await resolveName(targetUserId, targetGroupId);
+      resolved = resolveTarget(targetInput);
+      if (resolved.error) { bot.sendMessage(msg.chat.id, resolved.error, { parse_mode: 'HTML' }); break; }
+      targetUserId = resolved.userId;
+      targetName = resolved.name || await resolveName(targetUserId, targetGroupId);
 
       try {
         const currentWarn = addWarn(targetGroupId, targetUserId);
@@ -433,7 +424,6 @@ bot.on('message', async (msg) => {
         const warnBar = buildWarnBar(currentWarn, WARN_LIMIT);
 
         if (currentWarn >= WARN_LIMIT) {
-          // ☢️ ครบลิมิต → แบนอัตโนมัติ
           apiCounter += 3;
           await bot.banChatMember(targetGroupId, targetUserId);
           clearWarn(targetGroupId, targetUserId);
@@ -443,250 +433,201 @@ bot.on('message', async (msg) => {
             `☢️ <b>[ RADIATION OVERLOAD - AUTO BAN ]</b>\n👤 <b>เป้าหมาย:</b> <a href="tg://user?id=${targetUserId}">${targetName}</a> (<code>${targetUserId}</code>)\n☢️ รังสี: [${warnBar}] ${currentWarn}/${WARN_LIMIT}\n💥 สาเหตุ: <code>${reason}</code>\n☠️ ถูกขับออกนอกชั้นบรรยากาศ (AUTO-BAN)\n⏰ <i>ระเหยใน 60 วิ...</i>`,
             { parse_mode: 'HTML' }
           );
+          setTimeout(() => { bot.deleteMessage(targetGroupId, m.message_id).catch(() => {}); }, 60000);
 
-          setTimeout(() => { apiCounter++; bot.deleteMessage(targetGroupId, m.message_id).catch(() => {}); }, 60000);
-
-          apiCounter += 2;
           await bot.sendMessage(LOG_CHANNEL_ID,
-            `📜 <b>[ AUTO-BAN LOG ]</b>\nกลุ่ม: ${groupName} (<code>${targetGroupId}</code>)\nเป้าหมาย: ${targetName} (<code>${targetUserId}</code>)\nสาเหตุ: ${reason} | Warn ครบ ${WARN_LIMIT}`,
+            `📜 <b>[ AUTO-BAN LOG ]</b>\nกลุ่ม: ${groupName}\nเป้าหมาย: ${targetName} (<code>${targetUserId}</code>)\nสาเหตุ: ${reason} | Warn ครบ ${WARN_LIMIT}`,
             { parse_mode: 'HTML' }
           );
           bot.sendMessage(msg.chat.id, `☢️ Warn ครบ ${WARN_LIMIT}/${WARN_LIMIT} — แบนอัตโนมัติแล้ว`, { parse_mode: 'HTML' });
-
         } else {
-          // ⚠️ ยังไม่ครบลิมิต → แจ้งเตือนในกลุ่ม
           apiCounter += 3;
           const remaining = WARN_LIMIT - currentWarn;
-
           const m = await bot.sendMessage(targetGroupId,
             `☢️ <b>[ BIOHAZARD WARNING ]</b>\n👤 <b>เป้าหมาย:</b> <a href="tg://user?id=${targetUserId}">${targetName}</a> (<code>${targetUserId}</code>)\n☢️ รังสี: [${warnBar}] ${currentWarn}/${WARN_LIMIT}\n⚠️ สาเหตุ: <code>${reason}</code>\n🚨 อีก <b>${remaining} ครั้ง</b> จะถูกแบนอัตโนมัติ\n⏰ <i>ระเหยใน 60 วิ...</i>`,
             { parse_mode: 'HTML' }
           );
-
-          setTimeout(() => { apiCounter++; bot.deleteMessage(targetGroupId, m.message_id).catch(() => {}); }, 60000);
+          setTimeout(() => { bot.deleteMessage(targetGroupId, m.message_id).catch(() => {}); }, 60000);
 
           await bot.sendMessage(LOG_CHANNEL_ID,
-            `📜 <b>[ WARN LOG ]</b>\nกลุ่ม: ${groupName} (<code>${targetGroupId}</code>)\nเป้าหมาย: ${targetName} (<code>${targetUserId}</code>) | ${currentWarn}/${WARN_LIMIT}\nสาเหตุ: ${reason}`,
+            `📜 <b>[ WARN LOG ]</b>\nกลุ่ม: ${groupName}\nเป้าหมาย: ${targetName} (<code>${targetUserId}</code>) | ${currentWarn}/${WARN_LIMIT}\nสาเหตุ: ${reason}`,
             { parse_mode: 'HTML' }
           );
           bot.sendMessage(msg.chat.id, `☢️ Warn สำเร็จ ${currentWarn}/${WARN_LIMIT} (เหลืออีก ${remaining} ครั้ง)`, { parse_mode: 'HTML' });
         }
       } catch (e) {
-        apiCounter++;
         bot.sendMessage(msg.chat.id, `⚠️ ระบบ Warn ขัดข้อง: <code>${e.message}</code>`, { parse_mode: 'HTML' });
       }
-      return;
-    }
+      break;
 
     // ==========================================
-    // 🧬 โหมดล้างพิษดีเอ็นเอ (DNA Detox / Unwarn)
+    // 🧬 โหมดล้างพิษดีเอ็นเอ
     // ==========================================
-    if (promptText.includes('[DNA DETOX PROTOCOL]')) {
-      if (!msg.text) return;
+    case 'unwarn':
       apiCounter++;
+      spaceIdx = inputStr.indexOf(' ');
+      targetInput = spaceIdx === -1 ? inputStr : inputStr.substring(0, spaceIdx);
+      reason = spaceIdx === -1 ? 'ได้รับการล้างพิษจากศูนย์ควบคุมยานแม่' : inputStr.substring(spaceIdx + 1).trim() || 'ได้รับการล้างพิษจากศูนย์ควบคุมยานแม่';
 
-      const spaceIdx = msg.text.trim().indexOf(' ');
-      const targetInput = spaceIdx === -1 ? msg.text.trim() : msg.text.trim().substring(0, spaceIdx);
-      const reason = spaceIdx === -1 ? 'ได้รับการล้างพิษจากศูนย์ควบคุมยานแม่' : msg.text.trim().substring(spaceIdx + 1).trim() || 'ได้รับการล้างพิษจากศูนย์ควบคุมยานแม่';
-
-      const resolved = resolveTarget(targetInput);
-      if (resolved.error) { apiCounter++; return bot.sendMessage(msg.chat.id, resolved.error, { parse_mode: 'HTML' }); }
-      let targetUserId = resolved.userId;
-      let targetName = resolved.name || await resolveName(targetUserId, targetGroupId);
+      resolved = resolveTarget(targetInput);
+      if (resolved.error) { bot.sendMessage(msg.chat.id, resolved.error, { parse_mode: 'HTML' }); break; }
+      targetUserId = resolved.userId;
+      targetName = resolved.name || await resolveName(targetUserId, targetGroupId);
 
       const prevWarn = getWarnCount(targetGroupId, targetUserId);
-      if (prevWarn === 0) {
-        apiCounter++;
-        return bot.sendMessage(msg.chat.id, `🧬 เป้าหมายไม่มี Warn อยู่แล้ว`, { parse_mode: 'HTML' });
-      }
+      if (prevWarn === 0) { bot.sendMessage(msg.chat.id, `🧬 เป้าหมายไม่มี Warn อยู่แล้ว`, { parse_mode: 'HTML' }); break; }
 
       const newWarn = removeWarn(targetGroupId, targetUserId);
       saveDailyData();
-      const warnBar = buildWarnBar(newWarn, WARN_LIMIT);
+      const wBar = buildWarnBar(newWarn, WARN_LIMIT);
 
       try {
         apiCounter += 3;
         const m = await bot.sendMessage(targetGroupId,
-          `🧬 <b>[ DNA DETOX COMPLETE ]</b>\n👤 <b>เป้าหมาย:</b> <a href="tg://user?id=${targetUserId}">${targetName}</a> (<code>${targetUserId}</code>)\n☢️ รังสีหลังล้าง: [${warnBar}] ${newWarn}/${WARN_LIMIT}\n💉 หมายเหตุ: <code>${reason}</code>\n⏰ <i>ระเหยใน 60 วิ...</i>`,
+          `🧬 <b>[ DNA DETOX COMPLETE ]</b>\n👤 <b>เป้าหมาย:</b> <a href="tg://user?id=${targetUserId}">${targetName}</a> (<code>${targetUserId}</code>)\n☢️ รังสีหลังล้าง: [${wBar}] ${newWarn}/${WARN_LIMIT}\n💉 หมายเหตุ: <code>${reason}</code>\n⏰ <i>ระเหยใน 60 วิ...</i>`,
           { parse_mode: 'HTML' }
         );
-
-        setTimeout(() => { apiCounter++; bot.deleteMessage(targetGroupId, m.message_id).catch(() => {}); }, 60000);
+        setTimeout(() => { bot.deleteMessage(targetGroupId, m.message_id).catch(() => {}); }, 60000);
 
         await bot.sendMessage(LOG_CHANNEL_ID,
-          `📜 <b>[ UNWARN LOG ]</b>\nกลุ่ม: ${groupName} (<code>${targetGroupId}</code>)\nเป้าหมาย: ${targetName} (<code>${targetUserId}</code>) | ${prevWarn} → ${newWarn}\nหมายเหตุ: ${reason}`,
+          `📜 <b>[ UNWARN LOG ]</b>\nกลุ่ม: ${groupName}\nเป้าหมาย: ${targetName} (<code>${targetUserId}</code>) | ${prevWarn} → ${newWarn}\nหมายเหตุ: ${reason}`,
           { parse_mode: 'HTML' }
         );
         bot.sendMessage(msg.chat.id, `🧬 Unwarn สำเร็จ! รังสีเหลือ ${newWarn}/${WARN_LIMIT}`, { parse_mode: 'HTML' });
       } catch (e) {
-        apiCounter++;
         bot.sendMessage(msg.chat.id, `⚠️ Unwarn ขัดข้อง: <code>${e.message}</code>`, { parse_mode: 'HTML' });
       }
-      return;
-    }
+      break;
 
     // ==========================================
-    // 🔬 โหมดสแกนระดับรังสี (Radiation Scanner / Warn Check)
+    // 🔬 โหมดสแกนระดับรังสี
     // ==========================================
-    if (promptText.includes('[RADIATION SCANNER]')) {
-      if (!msg.text) return;
+    case 'warncheck':
       apiCounter++;
+      targetInput = inputStr.split(' ')[0];
+      resolved = resolveTarget(targetInput);
+      if (resolved.error) { bot.sendMessage(msg.chat.id, resolved.error, { parse_mode: 'HTML' }); break; }
+      targetUserId = resolved.userId;
+      targetName = resolved.name || await resolveName(targetUserId, targetGroupId);
 
-      const targetInput = msg.text.trim().split(' ')[0];
-
-      const resolved = resolveTarget(targetInput);
-      if (resolved.error) { apiCounter++; return bot.sendMessage(msg.chat.id, resolved.error, { parse_mode: 'HTML' }); }
-      let targetUserId = resolved.userId;
-      let targetName = resolved.name || await resolveName(targetUserId, targetGroupId);
-
-      apiCounter++;
-      const currentWarn = getWarnCount(targetGroupId, targetUserId);
-      const warnBar = buildWarnBar(currentWarn, WARN_LIMIT);
-      const statusText = currentWarn === 0
-        ? '✅ ไม่พบรังสีสะสม'
-        : currentWarn >= WARN_LIMIT
-          ? '🚨 ระดับวิกฤต! อยู่ในขั้นถูกแบน'
-          : `⚠️ มีรังสีสะสม — อีก ${WARN_LIMIT - currentWarn} ครั้งจะถูกแบน`;
+      const currentW = getWarnCount(targetGroupId, targetUserId);
+      const cBar = buildWarnBar(currentW, WARN_LIMIT);
+      const statusText = currentW === 0 ? '✅ ไม่พบรังสีสะสม' : currentW >= WARN_LIMIT ? '🚨 ระดับวิกฤต! อยู่ในขั้นถูกแบน' : `⚠️ มีรังสีสะสม — อีก ${WARN_LIMIT - currentW} ครั้งจะถูกแบน`;
 
       bot.sendMessage(msg.chat.id,
-        `🔬 <b>[ RADIATION SCAN ]</b>\n👤 ${targetName} (<code>${targetUserId}</code>)\n🛰️ กลุ่ม: ${groupName}\n☢️ รังสี: [${warnBar}] ${currentWarn}/${WARN_LIMIT}\n📡 สถานะ: ${statusText}`,
+        `🔬 <b>[ RADIATION SCAN ]</b>\n👤 ${targetName} (<code>${targetUserId}</code>)\n🛰️ กลุ่ม: ${groupName}\n☢️ รังสี: [${cBar}] ${currentW}/${WARN_LIMIT}\n📡 สถานะ: ${statusText}`,
         { parse_mode: 'HTML' }
       );
-      return;
-    }
+      break;
 
     // ==========================================
-    // 💬 โหมดส่งข้อความตอบกลับผ่านลิงก์ (Reply Link System)
+    // 💬 โหมดส่งข้อความตอบกลับผ่านลิงก์
     // ==========================================
-    if (promptText.includes('[REPLY LINK PROTOCOL]')) {
-      if (!msg.text) return;
+    case 'replylink':
       apiCounter++;
       try {
-        const inputStr = msg.text.trim();
-        const spaceIndex = inputStr.indexOf(' ');
-        if (spaceIndex === -1) throw new Error("ตรวจพบข้อผิดพลาด: โปรดเคาะเว้นวรรคหลังลิงก์แล้วตามด้วยข้อความที่จะใช้ตอบกลับ");
+        spaceIdx = inputStr.indexOf(' ');
+        if (spaceIdx === -1) throw new Error("โปรดเคาะเว้นวรรคหลังลิงก์แล้วตามด้วยข้อความที่จะใช้ตอบกลับ");
 
-        const url = inputStr.substring(0, spaceIndex).trim();
-        const replyText = inputStr.substring(spaceIndex).trim();
-
-        let targetChatId;
-        let messageId;
+        const url = inputStr.substring(0, spaceIdx).trim();
+        const replyText = inputStr.substring(spaceIdx).trim();
+        let tChatId, mId;
 
         if (url.includes('/c/')) {
           const parts = url.split('/');
-          messageId = parseInt(parts.pop());
-          const chatIdStr = parts.pop();
-          targetChatId = parseInt("-100" + chatIdStr);
+          mId = parseInt(parts.pop());
+          tChatId = parseInt("-100" + parts.pop());
         } else {
           const parts = url.split('/');
-          messageId = parseInt(parts.pop());
-          const username = parts.pop();
-          targetChatId = "@" + username;
+          mId = parseInt(parts.pop());
+          tChatId = "@" + parts.pop();
         }
 
-        if (!targetChatId || isNaN(messageId)) throw new Error("รูปแบบพิกัดข้อความไม่สมบูรณ์");
+        if (!tChatId || isNaN(mId)) throw new Error("รูปแบบพิกัดข้อความไม่สมบูรณ์");
 
         apiCounter += 2;
-        await bot.sendMessage(targetGroupId, replyText, { reply_to_message_id: messageId });
+        await bot.sendMessage(targetGroupId, replyText, { reply_to_message_id: mId });
         bot.sendMessage(msg.chat.id, `📡 ตอบกลับข้อความสำเร็จ`, { parse_mode: 'HTML' });
       } catch (e) {
-        apiCounter++;
         bot.sendMessage(msg.chat.id, `❌ ตอบกลับไม่สำเร็จ: <code>${e.message}</code>`, { parse_mode: 'HTML' });
       }
-      return;
-    }
+      break;
 
     // ==========================================
-    // 🔴 โหมดแบนดีเอ็นเอ (Vaporize System)
+    // 🔴 โหมดแบนดีเอ็นเอ
     // ==========================================
-    if (promptText.includes('[VAPORIZE PROTOCOL]')) {
-      if (!msg.text) return;
+    case 'ban':
       apiCounter++;
+      spaceIdx = inputStr.indexOf(' ');
+      targetInput = spaceIdx === -1 ? inputStr : inputStr.substring(0, spaceIdx);
+      reason = spaceIdx === -1 ? 'ตรวจพบการขัดขวางและต่อต้านกองทัพเอเลี่ยน' : inputStr.substring(spaceIdx + 1).trim() || 'ตรวจพบการขัดขวางและต่อต้านกองทัพเอเลี่ยน';
 
-      const spaceIdx = msg.text.trim().indexOf(' ');
-      const targetInput = spaceIdx === -1 ? msg.text.trim() : msg.text.trim().substring(0, spaceIdx);
-      const reason = spaceIdx === -1 ? 'ตรวจพบการขัดขวางและต่อต้านกองทัพเอเลี่ยน' : msg.text.trim().substring(spaceIdx + 1).trim() || 'ตรวจพบการขัดขวางและต่อต้านกองทัพเอเลี่ยน';
-
-      const resolved = resolveTarget(targetInput);
-      if (resolved.error) { apiCounter++; return bot.sendMessage(msg.chat.id, resolved.error, { parse_mode: 'HTML' }); }
-      let targetUserId = resolved.userId;
-      let targetName = resolved.name || await resolveName(targetUserId, targetGroupId);
+      resolved = resolveTarget(targetInput);
+      if (resolved.error) { bot.sendMessage(msg.chat.id, resolved.error, { parse_mode: 'HTML' }); break; }
+      targetUserId = resolved.userId;
+      targetName = resolved.name || await resolveName(targetUserId, targetGroupId);
 
       try {
         apiCounter += 2;
         await bot.banChatMember(targetGroupId, targetUserId);
-        clearWarn(targetGroupId, targetUserId); // ล้าง warn ด้วยเมื่อแบน
+        clearWarn(targetGroupId, targetUserId);
         saveDailyData();
         
         const m = await bot.sendMessage(targetGroupId, `🔴 <b>[ BAN VAPORIZED ]</b>\n👤 <b>เป้าหมาย:</b> <b>${targetName}</b> (<code>${targetUserId}</code>)\n🚨 สาเหตุ: <code>${reason}</code>\n🛸 ถูกขับออกนอกชั้นบรรยากาศ (Vaporized)\n⏰ <i>ระเหยใน 60 วิ...</i>`, { parse_mode: 'HTML' });
-        
-        setTimeout(() => {
-          apiCounter++;
-          bot.deleteMessage(targetGroupId, m.message_id).catch(() => {});
-        }, 60000);
+        setTimeout(() => { bot.deleteMessage(targetGroupId, m.message_id).catch(() => {}); }, 60000);
 
-        apiCounter += 2;
-        await bot.sendMessage(LOG_CHANNEL_ID, `📜 <b>[ BAN LOG ]</b>\nกลุ่ม: ${groupName} (<code>${targetGroupId}</code>)\nเป้าหมาย: ${targetName} (<code>${targetUserId}</code>)\nสาเหตุ: ${reason}`, { parse_mode: 'HTML' });
+        await bot.sendMessage(LOG_CHANNEL_ID, `📜 <b>[ BAN LOG ]</b>\nกลุ่ม: ${groupName}\nเป้าหมาย: ${targetName} (<code>${targetUserId}</code>)\nสาเหตุ: ${reason}`, { parse_mode: 'HTML' });
         bot.sendMessage(msg.chat.id, `✅ แบนและบันทึก Log สำเร็จ`, { parse_mode: 'HTML' });
       } catch (e) {
-        apiCounter++;
         bot.sendMessage(msg.chat.id, `⚠️ แบนไม่สำเร็จ (ขาดสิทธิ์แอดมิน?): <code>${e.message}</code>`, { parse_mode: 'HTML' });
       }
-      return;
-    }
+      break;
 
     // ==========================================
-    // 🟢 โหมดปลดแบนดีเอ็นเอ (Reanimate System)
+    // 🟢 โหมดปลดแบนดีเอ็นเอ
     // ==========================================
-    if (promptText.includes('[REANIMATE PROTOCOL]')) {
-      if (!msg.text) return;
+    case 'unban':
       apiCounter++;
+      spaceIdx = inputStr.indexOf(' ');
+      targetInput = spaceIdx === -1 ? inputStr : inputStr.substring(0, spaceIdx);
+      reason = spaceIdx === -1 ? 'ได้รับการอภัยโทษสูงสุดจากยานแม่เอเลี่ยน' : inputStr.substring(spaceIdx + 1).trim() || 'ได้รับการอภัยโทษสูงสุดจากยานแม่เอเลี่ยน';
 
-      const spaceIdx = msg.text.trim().indexOf(' ');
-      const targetInput = spaceIdx === -1 ? msg.text.trim() : msg.text.trim().substring(0, spaceIdx);
-      const reason = spaceIdx === -1 ? 'ได้รับการอภัยโทษสูงสุดจากยานแม่เอเลี่ยน' : msg.text.trim().substring(spaceIdx + 1).trim() || 'ได้รับการอภัยโทษสูงสุดจากยานแม่เอเลี่ยน';
-
-      const resolved = resolveTarget(targetInput);
-      if (resolved.error) { apiCounter++; return bot.sendMessage(msg.chat.id, resolved.error, { parse_mode: 'HTML' }); }
-      let targetUserId = resolved.userId;
-      let targetName = resolved.name || await resolveName(targetUserId, targetGroupId);
+      resolved = resolveTarget(targetInput);
+      if (resolved.error) { bot.sendMessage(msg.chat.id, resolved.error, { parse_mode: 'HTML' }); break; }
+      targetUserId = resolved.userId;
+      targetName = resolved.name || await resolveName(targetUserId, targetGroupId);
 
       try {
         apiCounter += 2;
         await bot.unbanChatMember(targetGroupId, targetUserId, { only_if_banned: true });
         
         const m = await bot.sendMessage(targetGroupId, `🟢 <b>[ UNBAN REANIMATED ]</b>\n👤 <b>เป้าหมาย:</b> <b>${targetName}</b> (<code>${targetUserId}</code>)\n🔓 ได้รับอนุญาตให้กลับเข้ากลุ่มได้อีกครั้ง\n⏰ <i>ระเหยใน 60 วิ...</i>`, { parse_mode: 'HTML' });
-        
-        setTimeout(() => {
-          apiCounter++;
-          bot.deleteMessage(targetGroupId, m.message_id).catch(() => {});
-        }, 60000);
+        setTimeout(() => { bot.deleteMessage(targetGroupId, m.message_id).catch(() => {}); }, 60000);
 
-        apiCounter += 2;
-        await bot.sendMessage(LOG_CHANNEL_ID, `📜 <b>[ UNBAN LOG ]</b>\nกลุ่ม: ${groupName} (<code>${targetGroupId}</code>)\nเป้าหมาย: ${targetName} (<code>${targetUserId}</code>)\nสาเหตุ: ${reason}`, { parse_mode: 'HTML' });
+        await bot.sendMessage(LOG_CHANNEL_ID, `📜 <b>[ UNBAN LOG ]</b>\nกลุ่ม: ${groupName}\nเป้าหมาย: ${targetName} (<code>${targetUserId}</code>)\nสาเหตุ: ${reason}`, { parse_mode: 'HTML' });
         bot.sendMessage(msg.chat.id, `✅ ปลดแบนสำเร็จ`, { parse_mode: 'HTML' });
       } catch (e) {
-        apiCounter++;
         bot.sendMessage(msg.chat.id, `⚠️ ปลดแบนไม่สำเร็จ: <code>${e.message}</code>`, { parse_mode: 'HTML' });
       }
-      return;
-    }
+      break;
 
     // ==========================================
-    // 📡 โหมดประกาศคลื่นประสาท (Beam Transmission System)
+    // 📡 โหมดประกาศคลื่นประสาท
     // ==========================================
-    if (promptText.includes('[BEAM TRANSMISSION]')) {
+    case 'ann':
       apiCounter += 2;
       try {
         await bot.copyMessage(targetGroupId, msg.chat.id, msg.message_id);
         bot.sendMessage(msg.chat.id, `📡 ส่งข้อความเข้ากลุ่มสำเร็จ`, { parse_mode: 'HTML' });
       } catch (e) {
-        apiCounter++;
         bot.sendMessage(msg.chat.id, `❌ ส่งไม่สำเร็จ: <code>${e.message}</code>`, { parse_mode: 'HTML' });
       }
-      return;
-    }
+      break;
   }
+
+  // เคลียร์ Session หลังจบการทำงาน และคืนหน้าเมนู
+  monitorSessions.delete(msg.from.id);
+  restoreSubmenu(chatId, messageId, groupId);
 });
 
 // เปิดพอร์ตเชื่อมกับเว็บเซิร์ฟเวอร์เพื่อให้ Render ไม่ปิดระบบบอท
