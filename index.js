@@ -1,180 +1,213 @@
 const TelegramBot = require('node-telegram-bot-api');
 const http = require('http');
 
-// 🛡️ ดึงค่าตัวแปรลับจาก Render
+// 🛡️ ดึงค่าตัวแปรระบบความปลอดภัยจาก Render
 const token = process.env.BOT_TOKEN;
-const MY_USER_ID = parseInt(process.env.MY_USER_ID);
-const TARGET_GROUP_ID = parseInt(process.env.TARGET_GROUP_ID);
 const LOG_CHANNEL_ID = parseInt(process.env.LOG_CHANNEL_ID);
 
-if (!token || !MY_USER_ID || !TARGET_GROUP_ID || !LOG_CHANNEL_ID) {
-  console.error('❌ ข้อมูล Environment Variables ไม่ครบถ้วน กรุณาตรวจสอบบน Render');
+// 👥 ระบบ Whitelist รองรับผู้ใช้งานหลายคน (คั่นด้วยลูกน้ำ)
+const WHITELIST_IDS = process.env.WHITELIST_IDS 
+  ? process.env.WHITELIST_IDS.split(',').map(id => parseInt(id.trim())) 
+  : [];
+
+// 🛰️ ระบบเชื่อมต่อหลายกลุ่ม รูปแบบ: ไอดีกลุ่ม:ชื่อกลุ่ม,ไอดีกลุ่ม:ชื่อกลุ่ม
+const TARGET_GROUPS = [];
+if (process.env.TARGET_GROUPS) {
+  process.env.TARGET_GROUPS.split(',').forEach(item => {
+    const parts = item.split(':');
+    if (parts.length >= 2) {
+      const id = parts[0].trim();
+      const name = parts.slice(1).join(':').trim();
+      TARGET_GROUPS.push({ id: parseInt(id), name: name });
+    }
+  });
+}
+
+if (!token || WHITELIST_IDS.length === 0 || TARGET_GROUPS.length === 0 || !LOG_CHANNEL_ID) {
+  console.error('❌ CRITICAL ERROR: Environment Variables are missing or misconfigured on Render!');
   process.exit(1);
 }
 
 const bot = new TelegramBot(token, { polling: true });
-console.log('🛸 Alian Attack Bot เริ่มทำงาน (ปิดระบบ /ban แบบข้อความเพื่อหลบ GroupHelp)...');
+console.log(`🛸 Alian Attack Engine Active! Authorized Operators: ${WHITELIST_IDS.length} | Connected Sectors: ${TARGET_GROUPS.length}`);
 
 // ==========================================
-// ฟังก์ชันจัดการ การแบน (ธีม Alian Attack)
+// 1. เมนูหลักแสดงรายการกลุ่มทั้งหมดเมื่อกด /start
 // ==========================================
-async function executeBan(targetUserId, reason, chatId) {
-  if (!targetUserId || isNaN(targetUserId)) {
-    return bot.sendMessage(chatId, '❌ ข้อมูลผิดพลาด: กรุณาระบุเป็นตัวเลขไอดีเท่านั้น', { parse_mode: 'HTML' });
-  }
-  const timeStamp = new Date().toLocaleString('th-TH', { timeZone: 'Asia/Bangkok' });
-  
-  try {
-    await bot.banChatMember(TARGET_GROUP_ID, targetUserId);
-    
-    // ประกาศในกลุ่ม (ลบทิ้งใน 1 นาที) - ธีมยานแม่
-    const m = await bot.sendMessage(TARGET_GROUP_ID, `🛸 <b>ALIEN ABDUCTION (แบนผู้ใช้)</b>\n👽 เป้าหมาย ID: <code>${targetUserId}</code> ถูกยานแม่ Alian Attack ดูดออกจากพื้นที่แล้ว!\n📝 ข้อหา: ${reason}`, { parse_mode: 'HTML' });
-    setTimeout(() => bot.deleteMessage(TARGET_GROUP_ID, m.message_id).catch(() => {}), 60000);
-    
-    // ส่ง Log ถาวร
-    await bot.sendMessage(LOG_CHANNEL_ID, 
-      `📜 <b>[ SYSTEM LOG - BAN ]</b>\n` +
-      `▫️▫️▫️▫️▫️▫️▫️▫️▫️\n` +
-      `🔴 <b>การกระทำ:</b> สั่งแบนผู้ใช้งาน (Alian Attack)\n` +
-      `👤 <b>เป้าหมาย ID:</b> <code>${targetUserId}</code>\n` +
-      `📝 <b>เหตุผล:</b> <i>${reason}</i>\n` +
-      `▫️▫️▫️▫️▫️▫️▫️▫️▫️\n` +
-      `⏰ <b>เวลา:</b> ${timeStamp} น.`, 
-      { parse_mode: 'HTML' }
-    );
+function sendMainMenu(chatId) {
+  const keyboard = TARGET_GROUPS.map(g => [
+    { text: `🛰️ Sector: ${g.name}`, callback_data: `select_group_${g.id}` }
+  ]);
 
-    bot.sendMessage(chatId, `✅ ยานแม่จับกุมสำเร็จและส่ง Log เรียบร้อย: <code>${targetUserId}</code>`, { parse_mode: 'HTML' });
-  } catch (e) { 
-    // กรณีที่คนนั้นโดนแบนไปแล้ว หรือบอทไม่มีสิทธิ์
-    bot.sendMessage(chatId, `⚠️ <b>เป้าหมายนี้ถูกกำจัดไปแล้ว!</b> 🛸\n(เป้าหมายอาจจะโดนแบนไปก่อนหน้าแล้ว หรือยานแม่ไม่มีสิทธิ์แบนคนนี้)\n\n<code>รายละเอียดระบบ: ${e.message}</code>`, { parse_mode: 'HTML' }); 
-  }
-}
-
-// ==========================================
-// ฟังก์ชันจัดการ การปลดแบน (ธีม Alian Attack)
-// ==========================================
-async function executeUnban(targetUserId, reason, chatId) {
-  if (!targetUserId || isNaN(targetUserId)) {
-    return bot.sendMessage(chatId, '❌ ข้อมูลผิดพลาด: กรุณาระบุเป็นตัวเลขไอดีเท่านั้น', { parse_mode: 'HTML' });
-  }
-  const timeStamp = new Date().toLocaleString('th-TH', { timeZone: 'Asia/Bangkok' });
-  
-  try {
-    await bot.unbanChatMember(TARGET_GROUP_ID, targetUserId, { only_if_banned: true });
-    
-    // ประกาศในกลุ่ม (ลบทิ้งใน 1 นาที)
-    const m = await bot.sendMessage(TARGET_GROUP_ID, `🛸 <b>TARGET RELEASED (ปลดแบน)</b>\n👽 เป้าหมาย ID: <code>${targetUserId}</code> ได้รับการปล่อยตัวจากยานแม่!\n📝 เหตุผล: ${reason}`, { parse_mode: 'HTML' });
-    setTimeout(() => bot.deleteMessage(TARGET_GROUP_ID, m.message_id).catch(() => {}), 60000);
-
-    await bot.sendMessage(LOG_CHANNEL_ID, 
-      `📜 <b>[ SYSTEM LOG - UNBAN ]</b>\n` +
-      `▫️▫️▫️▫️▫️▫️▫️▫️▫️\n` +
-      `🟢 <b>การกระทำ:</b> ปลดแบนผู้ใช้งาน\n` +
-      `👤 <b>เป้าหมาย ID:</b> <code>${targetUserId}</code>\n` +
-      `📝 <b>เหตุผล:</b> <i>${reason}</i>\n` +
-      `▫️▫️▫️▫️▫️▫️▫️▫️▫️\n` +
-      `⏰ <b>เวลา:</b> ${timeStamp} น.`, 
-      { parse_mode: 'HTML' }
-    );
-
-    bot.sendMessage(chatId, `✅ ปลดแบนและส่ง Log สำเร็จ: <code>${targetUserId}</code>`, { parse_mode: 'HTML' });
-  } catch (e) { 
-    bot.sendMessage(chatId, `⚠️ <b>ไม่สามารถปล่อยตัวได้!</b>\n(อาจจะไม่ได้โดนแบนอยู่ หรือมีข้อผิดพลาดระบบ)\n\n<code>รายละเอียดระบบ: ${e.message}</code>`, { parse_mode: 'HTML' }); 
-  }
-}
-
-// ==========================================
-// 1. ส่งหน้าต่างปุ่มกดเมื่อพิมพ์ /start
-// ==========================================
-bot.onText(/\/start/, (msg) => {
-  if (msg.from.id !== MY_USER_ID) return;
-  
-  const options = {
+  bot.sendMessage(chatId, "🛸 <b>ALIAN ATTACK COMMAND CENTER</b>\nSelect target sector to initialize control:", {
     parse_mode: 'HTML',
-    reply_markup: {
-      inline_keyboard: [
-        [
-          { text: '🛸 จับกุม (Ban)', callback_data: 'cmd_ban' },
-          { text: '🟢 ปล่อยตัว (Unban)', callback_data: 'cmd_unban' }
-        ],
-        [
-          { text: '📢 ประกาศคำสั่งยานแม่', callback_data: 'cmd_announce' }
-        ]
-      ]
-    }
-  };
-  
-  bot.sendMessage(msg.chat.id, "🛸 <b>ยานแม่ Alian Attack ออนไลน์!</b>\nกรุณากดเลือกเมนูควบคุมยานแม่ด้านล่างนี้:", options);
+    reply_markup: { inline_keyboard: keyboard }
+  });
+}
+
+bot.onText(/\/start/, (msg) => {
+  if (!WHITELIST_IDS.includes(msg.from.id)) return;
+  sendMainMenu(msg.chat.id);
 });
 
 // ==========================================
-// 2. จัดการคำสั่งเมื่อคุณกดปุ่มบนจอ
+// 2. จัดการระบบปุ่มกดเจาะจงกลุ่ม (Inline Keyboard)
 // ==========================================
-bot.on('callback_query', (query) => {
-  if (query.from.id !== MY_USER_ID) return bot.answerCallbackQuery(query.id, { text: 'คุณไม่มีสิทธิ์ควบคุมยานแม่!', show_alert: true });
-  
-  const chatId = query.message.chat.id;
-  
-  if (query.data === 'cmd_ban') {
-    bot.sendMessage(chatId, '🛸 <b>โหมดจับกุม (แบน)</b>\nกรุณาพิมพ์:\n<code>ไอดี เหตุผล</code>\n(เช่น 123456789 สแปมกลุ่ม)', {
-      parse_mode: 'HTML', reply_markup: { force_reply: true }
-    });
-  } else if (query.data === 'cmd_unban') {
-    bot.sendMessage(chatId, '🟢 <b>โหมดปล่อยตัว (ปลดแบน)</b>\nกรุณาพิมพ์:\n<code>ไอดี เหตุผล</code>\n(เช่น 123456789 ขอโอกาส)', {
-      parse_mode: 'HTML', reply_markup: { force_reply: true }
-    });
-  } else if (query.data === 'cmd_announce') {
-    bot.sendMessage(chatId, '📢 <b>โหมดประกาศ</b>\nพิมพ์ข้อความที่ต้องการให้ยานแม่ประกาศลงกลุ่ม:', {
-      parse_mode: 'HTML', reply_markup: { force_reply: true }
-    });
+bot.on('callback_query', async (query) => {
+  if (!WHITELIST_IDS.includes(query.from.id)) {
+    return bot.answerCallbackQuery(query.id, { text: 'ACCESS DENIED: Unauthorized Identity Detected.', show_alert: true });
   }
-  
-  bot.answerCallbackQuery(query.id);
+
+  const chatId = query.message.chat.id;
+  const messageId = query.message.message_id;
+  const data = query.data;
+
+  // เมนูกลับหน้าหลัก
+  if (data === 'back_to_main') {
+    bot.deleteMessage(chatId, messageId).catch(() => {});
+    sendMainMenu(chatId);
+    return bot.answerCallbackQuery(query.id);
+  }
+
+  // เมื่อเลือกกลุ่มเสร็จแล้ว แสดงเมนูย่อยของกลุ่มนั้นๆ
+  if (data.startsWith('select_group_')) {
+    const groupId = data.replace('select_group_', '');
+    const group = TARGET_GROUPS.find(g => g.id == groupId);
+
+    if (!group) return bot.answerCallbackQuery(query.id, { text: 'Sector Not Found.' });
+
+    const submenu = [
+      [
+        { text: '🛸 Abduct (Ban)', callback_data: `opt_ban_${groupId}` },
+        { text: '🟢 Release (Unban)', callback_data: `opt_unban_${groupId}` }
+      ],
+      [
+        { text: '📢 Transmit Media / Text', callback_data: `opt_ann_${groupId}` }
+      ],
+      [
+        { text: '⬅️ Back to Sectors', callback_data: 'back_to_main' }
+      ]
+    ];
+
+    await bot.editMessageText(`🛰️ <b>Active Sector:</b> <code>${group.name}</code>\nSelect tactical operations for this environment:`, {
+      chat_id: chatId,
+      message_id: messageId,
+      parse_mode: 'HTML',
+      reply_markup: { inline_keyboard: submenu }
+    });
+    return bot.answerCallbackQuery(query.id);
+  }
+
+  // ประมวลผลเมื่อเลือก ฟังก์ชันย่อย (Ban / Unban / Announce)
+  if (data.startsWith('opt_')) {
+    const action = data.split('_')[1]; // ban, unban, ann
+    const groupId = data.split('_')[2];
+    
+    if (action === 'ban') {
+      bot.sendMessage(chatId, `🪐 <b>[BAN MODE] Sector:</b> <code>${groupId}</code>\nReply to this message with: <code>ID Reason</code>`, {
+        parse_mode: 'HTML', reply_markup: { force_reply: true }
+      });
+    } else if (action === 'unban') {
+      bot.sendMessage(chatId, `🪐 <b>[UNBAN MODE] Sector:</b> <code>${groupId}</code>\nReply to this message with: <code>ID Reason</code>`, {
+        parse_mode: 'HTML', reply_markup: { force_reply: true }
+      });
+    } else if (action === 'ann') {
+      bot.sendMessage(chatId, `📢 <b>[TRANSMIT MODE] Sector:</b> <code>${groupId}</code>\nSend any text, photo, video, or media here to broadcast natively:`, {
+        parse_mode: 'HTML', reply_markup: { force_reply: true }
+      });
+    }
+    bot.answerCallbackQuery(query.id);
+  }
 });
 
 // ==========================================
-// 3. ดักจับข้อความ (รับเฉพาะตอนคุณ Reply ตอบบอทเท่านั้น)
+// 3. ระบบประมวลผลคำสั่งหลังกรอกข้อมูล (Force Reply Handling)
 // ==========================================
 bot.on('message', async (msg) => {
-  if (msg.from.id !== MY_USER_ID) return;
-  if (!msg.text) return;
-  if (msg.text.startsWith('/start')) return;
+  if (!WHITELIST_IDS.includes(msg.from.id)) return;
+  if (msg.text && msg.text.startsWith('/start')) return;
 
-  // ตรวจสอบว่าคุณพิมพ์ตอบกลับ (Reply) จากช่องที่เด้งขึ้นมาหรือไม่
+  // ตรวจสอบระบบดักจับกล่องข้อความ Reply
   if (msg.reply_to_message && msg.reply_to_message.text) {
-     const promptText = msg.reply_to_message.text;
-     
-     if (promptText.includes('โหมดจับกุม (แบน)')) {
-       const args = msg.text.split(' ');
-       const targetUserId = args[0];
-       const reason = args.slice(1).join(' ') || 'คำสั่งจากยานแม่';
-       await executeBan(targetUserId, reason, msg.chat.id);
-       return;
-     }
-     
-     if (promptText.includes('โหมดปล่อยตัว (ปลดแบน)')) {
-       const args = msg.text.split(' ');
-       const targetUserId = args[0];
-       const reason = args.slice(1).join(' ') || 'ความเมตตาจากยานแม่';
-       await executeUnban(targetUserId, reason, msg.chat.id);
-       return;
-     }
-     
-     if (promptText.includes('โหมดประกาศ')) {
-       try {
-         await bot.sendMessage(TARGET_GROUP_ID, `📢 <b>ประกาศจากยานแม่ Alian Attack:</b>\n\n${msg.text}`, { parse_mode: 'HTML' });
-         await bot.sendMessage(LOG_CHANNEL_ID, `📜 <b>[ SYSTEM LOG - ANNOUNCEMENT ]</b>\nยานแม่ส่งประกาศลงกลุ่ม:\n\n${msg.text}`, { parse_mode: 'HTML' });
-         bot.sendMessage(msg.chat.id, '✅ ส่งข้อความประกาศลงกลุ่มหลักเรียบร้อยครับ');
-       } catch (e) {
-         bot.sendMessage(msg.chat.id, `❌ ส่งประกาศไม่สำเร็จ:\n<code>${e.message}</code>`, { parse_mode: 'HTML' });
-       }
-       return;
-     }
+    const promptText = msg.reply_to_message.text;
+    
+    // ดึงรหัสกลุ่มเป้าหมายจากข้อความคำสั่งของระบบบอทเอง
+    const matchGroup = promptText.match(/Sector:\s*(-?\d+)/);
+    if (!matchGroup) return;
+    const targetGroupId = parseInt(matchGroup[1]);
+
+    // 🔴 ปฏิบัติการแบน (สไตล์สั้น กระชับ ตัวหนาสวยงาม ภาษาอังกฤษ)
+    if (promptText.includes('[BAN MODE]')) {
+      if (!msg.text) return;
+      const args = msg.text.split(' ');
+      const targetUserId = args[0];
+      const reason = args.slice(1).join(' ') || 'Violation of rules';
+
+      if (!targetUserId || isNaN(targetUserId)) {
+        return bot.sendMessage(msg.chat.id, '❌ <b>Invalid Protocol:</b> User ID must be numerical.');
+      }
+
+      try {
+        await bot.banChatMember(targetGroupId, targetUserId);
+        
+        // ประกาศสั้นๆ สวยงามในกลุ่มหลัก (ลบใน 1 นาที)
+        const m = await bot.sendMessage(targetGroupId, `🪐 <b>ABDUCTED</b>\n🆔 <code>${targetUserId}</code>\n🚨 <b>Reason:</b> <b>${reason}</b>`, { parse_mode: 'HTML' });
+        setTimeout(() => bot.deleteMessage(targetGroupId, m.message_id).catch(() => {}), 60000);
+
+        // บันทึก Log ถาวรลง Channel
+        await bot.sendMessage(LOG_CHANNEL_ID, `📜 <b>[ BAN LOG ]</b>\nSector ID: <code>${targetGroupId}</code>\nTarget ID: <code>${targetUserId}</code>\nReason: ${reason}\nOperator: <code>${msg.from.id}</code>`, { parse_mode: 'HTML' });
+        bot.sendMessage(msg.chat.id, `✅ <b>Target successfully abducted from sector.</b>`);
+      } catch (e) {
+        // แจ้งเตือนกรณีคนนั้นโดนแบนอยู่แล้ว หรือซ้ำซ้อน
+        bot.sendMessage(msg.chat.id, `⚠️ <b>Target already liquidated</b>\nUser might already be banned or Alian Attack lacks admin privileges in this sector.\n\n<code>System info: ${e.message}</code>`, { parse_mode: 'HTML' });
+      }
+      return;
+    }
+
+    // 🟢 ปฏิบัติการปลดแบน
+    if (promptText.includes('[UNBAN MODE]')) {
+      if (!msg.text) return;
+      const args = msg.text.split(' ');
+      const targetUserId = args[0];
+      const reason = args.slice(1).join(' ') || 'Released by operator';
+
+      if (!targetUserId || isNaN(targetUserId)) {
+        return bot.sendMessage(msg.chat.id, '❌ <b>Invalid Protocol:</b> User ID must be numerical.');
+      }
+
+      try {
+        await bot.unbanChatMember(targetGroupId, targetUserId, { only_if_banned: true });
+
+        // ประกาศปลดแบนสั้นๆ ในกลุ่มหลัก (ลบใน 1 นาที)
+        const m = await bot.sendMessage(targetGroupId, `🪐 <b>RELEASED</b>\n🆔 <code>${targetUserId}</code>\n✨ <b>Access Restored</b>`, { parse_mode: 'HTML' });
+        setTimeout(() => bot.deleteMessage(targetGroupId, m.message_id).catch(() => {}), 60000);
+
+        await bot.sendMessage(LOG_CHANNEL_ID, `📜 <b>[ UNBAN LOG ]</b>\nSector ID: <code>${targetGroupId}</code>\nTarget ID: <code>${targetUserId}</code>\nOperator: <code>${msg.from.id}</code>`, { parse_mode: 'HTML' });
+        bot.sendMessage(msg.chat.id, `✅ <b>Target released successfully.</b>`);
+      } catch (e) {
+        bot.sendMessage(msg.chat.id, `⚠️ <b>Unable to complete release.</b>\n<code>System info: ${e.message}</code>`, { parse_mode: 'HTML' });
+      }
+      return;
+    }
+
+    // 📢 ปฏิบัติการประกาศกระจายเสียง (รองรับข้อความดิบ และสื่อทุกประเภทแบบไร้หัวเรื่อง)
+    if (promptText.includes('[TRANSMIT MODE]')) {
+      try {
+        // ใช้ระบบคัดลอกข้อความดั้งเดิม (CopyMessage) ทำให้ส่ง Media, รูปภาพ, วิดีโอ ได้ตรงๆ ตามโครงสร้างเดิม
+        await bot.copyMessage(targetGroupId, msg.chat.id, msg.message_id);
+        
+        // ส่งบันทึกเข้าคลัง Log Channel
+        await bot.sendMessage(LOG_CHANNEL_ID, `📜 <b>[ TRANSMISSION LOG ]</b>\nSector ID: <code>${targetGroupId}</code> initiated by operator <code>${msg.from.id}</code>:`, { parse_mode: 'HTML' });
+        await bot.copyMessage(LOG_CHANNEL_ID, msg.chat.id, msg.message_id);
+
+        bot.sendMessage(msg.chat.id, `✨ <b>Transmission broadcasted natively to targeted sector.</b>`);
+      } catch (e) {
+        bot.sendMessage(msg.chat.id, `❌ <b>Transmission failed:</b>\n<code>${e.message}</code>`, { parse_mode: 'HTML' });
+      }
+      return;
+    }
   }
-  
-  // ⛔ โค้ดเดิมที่รับคำสั่ง /ban หรือ /unban ตรงๆ ถูกลบทิ้งหมดแล้ว
-  // ทำให้บอทตัวนี้จะไม่ทำงานทับซ้อนกับ GroupHelp แน่นอนครับ!
 });
 
-// เปิดพอร์ตให้ Render ตรวจสอบว่าบอทไม่ตาย
+// เว็บเซิร์ฟเวอร์เพื่อให้ Render ตรวจสอบสถานะการออนไลน์
 http.createServer((req, res) => res.end('OK')).listen(process.env.PORT || 3000);
