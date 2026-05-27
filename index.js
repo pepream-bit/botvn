@@ -40,156 +40,33 @@ const bot = new TelegramBot(token, { polling: true });
 console.log(`🛸 Alien Invasion Engine Active! Overlords: ${WHITELIST_IDS.length} | Target Sectors: ${TARGET_GROUPS.length}`);
 
 // ==========================================
-// 1. เมนูหลัก Command Center (ภาษาไทย)
+// 1. เมนูหลัก Command Center (ภาษาไทย - Reply Keyboard)
 // ==========================================
 function sendMainMenu(chatId) {
   apiCounter++;
-  const keyboard = TARGET_GROUPS.map(g => [
-    { text: `🛰️ เซกเตอร์เป้าหมาย: ${g.name}`, callback_data: `select_group_${g.id}` }
+  
+  // สร้างแป้นพิมพ์ถาวรด้านล่าง (Reply Keyboard) สำหรับเซกเตอร์กลุ่ม
+  const keyboardButtons = TARGET_GROUPS.map(g => [
+    { text: `🛰️ เซกเตอร์: ${g.name}` }
   ]);
 
-  // เพิ่มแถวปุ่มระบบข้อมูลเสริมภาษาไทย
-  keyboard.push([
-    { text: `📊 โควตาพลังงาน API`, callback_data: `view_api_limits` },
-    { text: `👥 รายชื่อ Whitelist`, callback_data: `view_whitelist` }
+  // เพิ่มเมนูระบบเสริมไว้ที่แถวล่างสุด
+  keyboardButtons.push([
+    { text: `📊 โควตาพลังงาน API` },
+    { text: `👥 รายชื่อ Whitelist` }
   ]);
 
-  bot.sendMessage(chatId, "🛸 <b>แผงควบคุมหลัก: กองทัพเอเลี่ยนต่างดาว (Alien Attack Machine)</b>\nยินดีต้อนรับท่านผู้บัญชาการ โปรดเลือกเซกเตอร์ดาวเทียมที่ต้องการเข้าควบคุม:", {
+  bot.sendMessage(chatId, "🛸 <b>แผงควบคุมหลัก: กองทัพเอเลี่ยนต่างดาว (Alien Attack Machine)</b>\nยินดีต้อนรับท่านผู้บัญชาการ โปรดกดเลือกเซกเตอร์เป้าหมายจากแผงควบคุมด้านล่างเพื่อสั่งการ:", {
     parse_mode: 'HTML',
-    reply_markup: { inline_keyboard: keyboard }
+    reply_markup: {
+      keyboard: keyboardButtons,
+      resize_keyboard: true
+    }
   });
 }
 
-bot.onText(/\/start/, (msg) => {
-  if (!WHITELIST_IDS.includes(msg.from.id)) return;
-  sendMainMenu(msg.chat.id);
-});
-
 // ==========================================
-// 2. จัดการปุ่มกด (Inline Keyboard ภาษาไทย)
-// ==========================================
-bot.on('callback_query', async (query) => {
-  if (!WHITELIST_IDS.includes(query.from.id)) {
-    apiCounter++;
-    return bot.answerCallbackQuery(query.id, { text: 'ปฏิเสธการเข้าถึง! โครงข่ายไม่รู้จักรหัสสัญญาณของคุณ', show_alert: true });
-  }
-
-  const chatId = query.message.chat.id;
-  const messageId = query.message.message_id;
-  const data = query.data;
-
-  // กลับหน้าหลัก
-  if (data === 'back_to_main') {
-    apiCounter += 2;
-    bot.deleteMessage(chatId, messageId).catch(() => {});
-    sendMainMenu(chatId);
-    return bot.answerCallbackQuery(query.id);
-  }
-
-  // ดูสถานะ API
-  if (data === 'view_api_limits') {
-    apiCounter += 2;
-    const pct = Math.min(100, Math.round((apiCounter / API_DAILY_MAX) * 100));
-    const bars = Math.round(pct / 10);
-    const barStr = "🟩".repeat(bars) + "⬜".repeat(10 - bars);
-    
-    await bot.sendMessage(chatId, `📊 <b>เครื่องตรวจวัดพลังงานสัญญาณขีดจำกัด API</b>\n\nหลอดพลังงาน: [<code>${barStr}</code>] ${pct}%\nดึงสัญญาณไปแล้ว: <code>${apiCounter}</code> / <code>${API_DAILY_MAX}</code> ครั้ง\n\n⚠️ <i>คำเตือน: โปรดควบคุมการยิงสัญญานไม่ให้ทะลุ 100% เพื่อป้องกันระนาบระบบป้องกันของ Telegram ตรวจจับและระงับสัญญาณระบบยานแม่</i>`, { parse_mode: 'HTML' });
-    return bot.answerCallbackQuery(query.id);
-  }
-
-  // ดูรายชื่อ Whitelist พร้อมชื่อเล่นจากแคช
-  if (data === 'view_whitelist') {
-    apiCounter += 2;
-    let whitelistMessage = `👥 <b>รายชื่อโอเปอเรเตอร์ผู้ควบคุมยานแม่ (Whitelist)</b>\n━━━━━━━━━━━━━━━━━━━━\n`;
-    WHITELIST_IDS.forEach((id, idx) => {
-      let name = "ร่างอวตารนิรนาม (ยังไม่พบประวัติพิมพ์ข้อความ)";
-      for (const key in usernameCache) {
-        if (usernameCache[key].id === id) {
-          name = usernameCache[key].name;
-          break;
-        }
-      }
-      whitelistMessage += `${idx + 1}. 🆔 <code>${id}</code> [${name}]\n`;
-    });
-    whitelistMessage += `━━━━━━━━━━━━━━━━━━━━\n🛸 <i>สิทธิ์ในการสั่งการและแก้ไขชั้นบรรยากาศสูงสุด</i>`;
-    
-    await bot.sendMessage(chatId, whitelistMessage, { parse_mode: 'HTML' });
-    return bot.answerCallbackQuery(query.id);
-  }
-
-  // เลือกกลุ่มและแสดงเมนูย่อยระบบภาษาไทย
-  if (data.startsWith('select_group_')) {
-    apiCounter += 2;
-    const groupId = data.replace('select_group_', '');
-    const group = TARGET_GROUPS.find(g => g.id == groupId);
-    if (!group) return bot.answerCallbackQuery(query.id, { text: 'ไม่พบพิกัดเซกเตอร์เป้าหมายในแผนที่ดวงดาว' });
-
-    const submenu = [
-      [
-        { text: '🛑 ล้างบางเผ่าพันธุ์ (Ban)', callback_data: `opt_ban_${groupId}` },
-        { text: '✨ ชุบชีวิตเนื้อเยื่อ (Unban)', callback_data: `opt_unban_${groupId}` }
-      ],
-      [
-        { text: '🧲 ดูดสื่อไร้ร่องรอย (Stealth Capture)', callback_data: `cmd_capture_url_${groupId}` }
-      ],
-      [
-        { text: '📡 ยิงคลื่นประกาศ (Transmit)', callback_data: `opt_ann_${groupId}` },
-        { text: '💬 ตอบกลับด้วยลิงก์ (Reply Link)', callback_data: `opt_replylink_${groupId}` }
-      ],
-      [
-        { text: '⬅️ กลับสู่แผงควบคุมหลัก', callback_data: 'back_to_main' }
-      ]
-    ];
-
-    await bot.editMessageText(`🛰️ <b>พิกัดเซกเตอร์ที่ล็อกไว้:</b> <code>${group.name}</code>\nโปรดเลือกคำสั่งโปรโตคอลการโจมตีหรือดูดกลืนข้อมูล:`, {
-      chat_id: chatId,
-      message_id: messageId,
-      parse_mode: 'HTML',
-      reply_markup: { inline_keyboard: submenu }
-    });
-    return bot.answerCallbackQuery(query.id);
-  }
-
-  // เรียกโหมดดูดสื่อประจำกลุ่ม (Stealth) - ยิงแยกห้องรายบุคคล
-  if (data.startsWith('cmd_capture_url_')) {
-    apiCounter += 2;
-    const groupId = data.replace('cmd_capture_url_', '');
-    bot.sendMessage(chatId, `🧲 <b>[QUANTUM TRACTOR BEAM] พิกัดเซกเตอร์:</b> <code>${groupId}</code>\nป้อนลิงก์เป้าหมาย Telegram ลงในเครื่องสแกนชีวภาพ (เช่น https://t.me/c/xxxx/xxxx):`, {
-      parse_mode: 'HTML', reply_markup: { force_reply: true }
-    });
-    return bot.answerCallbackQuery(query.id);
-  }
-
-  // แจ้ง Force Reply ให้พิมพ์คำสั่งตามโหมดต่างๆ (ภาษาไทย)
-  if (data.startsWith('opt_')) {
-    apiCounter += 2;
-    const parts = data.split('_');
-    const action = parts[1];
-    const groupId = parts[2];
-    
-    if (action === 'ban') {
-      bot.sendMessage(chatId, `🛑 <b>[VAPORIZE PROTOCOL] พิกัดเซกเตอร์:</b> <code>${groupId}</code>\nส่งคำสั่งระบุเหยื่อที่จะล้างบาง:\nรูปแบบ: <code>@username เหตุผล</code> หรือ <code>รหัสเลขID เหตุผล</code>`, {
-        parse_mode: 'HTML', reply_markup: { force_reply: true }
-      });
-    } else if (action === 'unban') {
-      bot.sendMessage(chatId, `✨ <b>[REANIMATE PROTOCOL] พิกัดเซกเตอร์:</b> <code>${groupId}</code>\nส่งคำสั่งระบุดีเอ็นเอที่จะชุบชีวิตกลับมา:\nรูปแบบ: <code>@username เหตุผล</code> หรือ <code>รหัสเลขID เหตุผล</code>`, {
-        parse_mode: 'HTML', reply_markup: { force_reply: true }
-      });
-    } else if (action === 'ann') {
-      bot.sendMessage(chatId, `📡 <b>[BEAM TRANSMISSION] พิกัดเซกเตอร์:</b> <code>${groupId}</code>\nส่งไฟล์ภาพ วิดีโอ หรือข้อความ เพื่อฝังตัวเข้าโครงข่ายประสาทของเซกเตอร์แบบเนทีฟ:`, {
-        parse_mode: 'HTML', reply_markup: { force_reply: true }
-      });
-    } else if (action === 'replylink') {
-      bot.sendMessage(chatId, `💬 <b>[REPLY LINK PROTOCOL] พิกัดเซกเตอร์:</b> <code>${groupId}</code>\nส่งลิงก์พิกัดข้อความ ตามด้วยข้อความที่จะตอบกลับแบบเนทีฟ\nรูปแบบ: <code>[ลิงก์ข้อความ] [เว้นวรรค] [ข้อความตอบกลับ]</code>\nตัวอย่าง: <code>https://t.me/c/123/456 เปิดระบบสแกนแล้วมนุษย์โลก</code>`, {
-        parse_mode: 'HTML', reply_markup: { force_reply: true }
-      });
-    }
-    bot.answerCallbackQuery(query.id);
-  }
-});
-
-// ==========================================
-// 3. ระบบประมวลผลสัญญาณข้อความและเก็บประวัติคีย์
+// 2. ระบบประมวลผลข้อความและแป้นพิมพ์ควบคุมหลัก
 // ==========================================
 bot.on('message', async (msg) => {
   // 🛰️ ตรวจสแกนดีเอ็นเอผู้ส่งสารทุกคนในกลุ่มเก็บเข้าฐานข้อมูลชั่วคราว (เพื่อแปลง @username เป็นรหัสตัวเลข)
@@ -202,10 +79,115 @@ bot.on('message', async (msg) => {
     };
   }
 
+  // คัดกรองเฉพาะผู้ควบคุมที่ติด Whitelist เท่านั้น
   if (!WHITELIST_IDS.includes(msg.from.id)) return;
-  if (msg.text && msg.text.startsWith('/start')) return;
 
-  // ทำงานเมื่อมีการ Reply กลับหาบอทเท่านั้น
+  // --- ประมวลผลกรณีที่มีตัวอักษรเข้ามา (ตรวจจับปุ่มเมนู Reply Keyboard) ---
+  if (msg.text) {
+    const text = msg.text.trim();
+
+    if (text === '/start' || text === '⬅️ กลับสู่แผงควบคุมหลัก') {
+      sendMainMenu(msg.chat.id);
+      return;
+    }
+
+    // ฟังก์ชันดูสถานะพลังงาน API
+    if (text === '📊 โควตาพลังงาน API') {
+      apiCounter++;
+      const pct = Math.min(100, Math.round((apiCounter / API_DAILY_MAX) * 100));
+      const bars = Math.round(pct / 10);
+      const barStr = "🟩".repeat(bars) + "⬜".repeat(10 - bars);
+      
+      await bot.sendMessage(msg.chat.id, `📊 <b>เครื่องตรวจวัดพลังงานสัญญาณขีดจำกัด API</b>\n\nหลอดพลังงาน: [<code>${barStr}</code>] ${pct}%\nดึงสัญญาณไปแล้ว: <code>${apiCounter}</code> / <code>${API_DAILY_MAX}</code> ครั้ง\n\n⚠️ <i>คำเตือน: โปรดควบคุมการยิงสัญญานไม่ให้ทะลุ 100% เพื่อป้องกันระนาบระบบป้องกันของ Telegram ตรวจจับและระงับสัญญาณระบบยานแม่</i>`, { parse_mode: 'HTML' });
+      return;
+    }
+
+    // ฟังก์ชันดูรายชื่อ Whitelist
+    if (text === '👥 รายชื่อ Whitelist') {
+      apiCounter++;
+      let whitelistMessage = `👥 <b>รายชื่อโอเปอเรเตอร์ผู้ควบคุมยานแม่ (Whitelist)</b>\n━━━━━━━━━━━━━━━━━━━━\n`;
+      WHITELIST_IDS.forEach((id, idx) => {
+        let name = "ร่างอวตารนิรนาม (ยังไม่พบประวัติพิมพ์ข้อความ)";
+        for (const key in usernameCache) {
+          if (usernameCache[key].id === id) {
+            name = usernameCache[key].name;
+            break;
+          }
+        }
+        whitelistMessage += `${idx + 1}. 🆔 <code>${id}</code> [${name}]\n`;
+      });
+      whitelistMessage += `━━━━━━━━━━━━━━━━━━━━\n🛸 <i>สิทธิ์ในการสั่งการและแก้ไขชั้นบรรยากาศสูงสุด</i>`;
+      
+      await bot.sendMessage(msg.chat.id, whitelistMessage, { parse_mode: 'HTML' });
+      return;
+    }
+
+    // ฟังก์ชันเมื่อกดเลือกกลุ่มกลุ่มใดกลุ่มหนึ่ง
+    if (text.startsWith('🛰️ เซกเตอร์: ')) {
+      const groupName = text.replace('🛰️ เซกเตอร์: ', '').trim();
+      const group = TARGET_GROUPS.find(g => g.name === groupName);
+      if (!group) {
+        bot.sendMessage(msg.chat.id, '❌ ไม่พบพิกัดเซกเตอร์เป้าหมายในแผนที่ดวงดาว');
+        return;
+      }
+
+      // เปลี่ยนแป้นพิมพ์ด้านล่างเป็นชุดคำสั่งปฏิบัติการของกลุ่มนั้นๆ
+      const submenuButtons = [
+        [{ text: `🛑 ล้างบาง (Ban) - ${group.name}` }, { text: `✨ ชุบชีวิต (Unban) - ${group.name}` }],
+        [{ text: `🧲 ดูดสื่อ (Stealth) - ${group.name}` }, { text: `📡 ประกาศ (Transmit) - ${group.name}` }],
+        [{ text: `💬 ตอบกลับลิงก์ (Reply) - ${group.name}` }, { text: `🔥 รีแอคชัน (Reaction) - ${group.name}` }],
+        [{ text: '⬅️ กลับสู่แผงควบคุมหลัก' }]
+      ];
+
+      bot.sendMessage(msg.chat.id, `🛰️ <b>พิกัดเซกเตอร์ที่ล็อกไว้:</b> <code>${group.name}</code>\nโปรดเลือกคำสั่งโปรโตคอลการโจมตีหรือดูดกลืนข้อมูลจากแผงคุมด้านล่าง:`, {
+        parse_mode: 'HTML',
+        reply_markup: {
+          keyboard: submenuButtons,
+          resize_keyboard: true
+        }
+      });
+      return;
+    }
+
+    // ตรวจสอบการกดปุ่มสั่งการปฏิบัติการย่อยในกลุ่มเป้าหมาย
+    let actionFound = false;
+    for (const group of TARGET_GROUPS) {
+      if (text.includes(`- ${group.name}`)) {
+        actionFound = true;
+        const groupId = group.id;
+
+        if (text.startsWith('🛑 ล้างบาง')) {
+          bot.sendMessage(msg.chat.id, `🛑 <b>[VAPORIZE PROTOCOL] พิกัดเซกเตอร์:</b> <code>${groupId}</code>\nส่งคำสั่งระบุเหยื่อที่จะล้างบาง:\nรูปแบบ: <code>@username เหตุผล</code> หรือ <code>รหัสเลขID เหตุผล</code>`, {
+            parse_mode: 'HTML', reply_markup: { force_reply: true }
+          });
+        } else if (text.startsWith('✨ ชุบชีวิต')) {
+          bot.sendMessage(msg.chat.id, `✨ <b>[REANIMATE PROTOCOL] พิกัดเซกเตอร์:</b> <code>${groupId}</code>\nส่งคำสั่งระบุดีเอ็นเอที่จะชุบชีวิตกลับมา:\nรูปแบบ: <code>@username เหตุผล</code> หรือ <code>รหัสเลขID เหตุผล</code>`, {
+            parse_mode: 'HTML', reply_markup: { force_reply: true }
+          });
+        } else if (text.startsWith('🧲 ดูดสื่อ')) {
+          bot.sendMessage(msg.chat.id, `🧲 <b>[QUANTUM TRACTOR BEAM] พิกัดเซกเตอร์:</b> <code>${groupId}</code>\nป้อนลิงก์เป้าหมาย Telegram ลงในเครื่องสแกนชีวภาพ (เช่น https://t.me/c/xxxx/xxxx):`, {
+            parse_mode: 'HTML', reply_markup: { force_reply: true }
+          });
+        } else if (text.startsWith('📡 ประกาศ')) {
+          bot.sendMessage(msg.chat.id, `📡 <b>[BEAM TRANSMISSION] พิกัดเซกเตอร์:</b> <code>${groupId}</code>\nส่งไฟล์ภาพ วิดีโอ หรือข้อความ เพื่อฝังตัวเข้าโครงข่ายประสาทของเซกเตอร์แบบเนทีฟ:`, {
+            parse_mode: 'HTML', reply_markup: { force_reply: true }
+          });
+        } else if (text.startsWith('💬 ตอบกลับลิงก์')) {
+          bot.sendMessage(msg.chat.id, `💬 <b>[REPLY LINK PROTOCOL] พิกัดเซกเตอร์:</b> <code>${groupId}</code>\nส่งลิงก์พิกัดข้อความ ตามด้วยข้อความที่จะตอบกลับแบบเนทีฟ\nรูปแบบ: <code>[ลิงก์ข้อความ] [เว้นวรรค] [ข้อความตอบกลับ]</code>\nตัวอย่าง: <code>https://t.me/c/123/456 เปิดระบบสแกนแล้วมนุษย์โลก</code>`, {
+            parse_mode: 'HTML', reply_markup: { force_reply: true }
+          });
+        } else if (text.startsWith('🔥 รีแอคชัน')) {
+          bot.sendMessage(msg.chat.id, `🔥 <b>[REACTION PROTOCOL] พิกัดเซกเตอร์:</b> <code>${groupId}</code>\nส่งลิงก์พิกัดข้อความ ตามด้วยอิโมจิที่จะให้บอทกดรีแอคชัน\nรูปแบบ: <code>[ลิงก์ข้อความ] [เว้นวรรค] [อิโมจิ]</code>\nตัวอย่าง: <code>https://t.me/c/2802866220/76297 👍</code>`, {
+            parse_mode: 'HTML', reply_markup: { force_reply: true }
+          });
+        }
+        break;
+      }
+    }
+    if (actionFound) return;
+  }
+
+  // --- 3. ระบบทำงานตอบกลับจาก Force Reply (รองรับสื่อและลิงก์ข้อความทุกประเภท) ---
   if (msg.reply_to_message && msg.reply_to_message.text) {
     const promptText = msg.reply_to_message.text;
 
@@ -242,10 +224,15 @@ bot.on('message', async (msg) => {
       return;
     }
 
-    // --- ระบบตรวจสอบ ID กลุ่มสำหรับการกระทำอื่นๆ ---
+    // ตรวจหา ID กลุ่มเป้าหมายจากข้อความชวนตอบกลับ
     const matchGroup = promptText.match(/พิกัดเซกเตอร์:\s*(-?\d+)/);
     if (!matchGroup) return;
     const targetGroupId = parseInt(matchGroup[1]);
+    const groupObj = TARGET_GROUPS.find(g => g.id === targetGroupId);
+    const groupName = groupObj ? groupObj.name : 'ไม่ระบุกลุ่ม';
+
+    // ดึงชื่อของเอเลี่ยน (Admin) ผู้พิมคำสั่งลงมือทำรายการ
+    const alienOperatorName = `${msg.from.first_name || ''} ${msg.from.last_name || ''}`.trim() || `@${msg.from.username}` || msg.from.id;
 
     // --- 💬 โหมดส่งข้อความตอบกลับผ่านลิงก์ (Reply Link System) ---
     if (promptText.includes('[REPLY LINK PROTOCOL]')) {
@@ -286,7 +273,52 @@ bot.on('message', async (msg) => {
       return;
     }
 
-    // --- 🛑 โหมดแบนดีเอ็นเอ (Vaporize System รองรับ @username และ ID ขยายกรอบข้อความภาษาไทย) ---
+    // --- 🔥 โหมดส่งรีแอคชันอิโมจิผ่านลิงก์ (Reaction System) ---
+    if (promptText.includes('[REACTION PROTOCOL]')) {
+      if (!msg.text) return;
+      apiCounter++;
+      try {
+        const inputStr = msg.text.trim();
+        const spaceIndex = inputStr.indexOf(' ');
+        if (spaceIndex === -1) throw new Error("ตรวจพบข้อผิดพลาด: โปรดเคาะเว้นวรรคหลังลิงก์แล้วตามด้วยอิโมจิที่จะกด");
+
+        const url = inputStr.substring(0, spaceIndex).trim();
+        const emojiText = inputStr.substring(spaceIndex).trim();
+
+        let targetChatId;
+        let messageId;
+
+        if (url.includes('/c/')) {
+          const parts = url.split('/');
+          messageId = parseInt(parts.pop());
+          const chatIdStr = parts.pop();
+          targetChatId = parseInt("-100" + chatIdStr);
+        } else {
+          const parts = url.split('/');
+          messageId = parseInt(parts.pop());
+          const username = parts.pop();
+          targetChatId = "@" + username;
+        }
+
+        if (!targetChatId || isNaN(messageId)) throw new Error("รูปแบบพิกัดข้อความไม่สมบูรณ์");
+
+        apiCounter += 2;
+        // เรียกใช้งานผ่าน Telegram Raw API เพื่อความยืดหยุ่นในการรองรับ Reaction ทุกเวอร์ชัน
+        await bot._request('setMessageReaction', {
+          chat_id: targetChatId,
+          message_id: messageId,
+          reaction: [{ type: 'emoji', emoji: emojiText }]
+        });
+
+        bot.sendMessage(msg.chat.id, `🔥 <b>ยานแม่บีมคลื่นรีแอคชันอิโมจิ [ ${emojiText} ] ไปยังข้อความลิงก์เรียบร้อยแล้ว!</b>`, { parse_mode: 'HTML' });
+      } catch (e) {
+        apiCounter++;
+        bot.sendMessage(msg.chat.id, `❌ <b>ปฏิบัติการส่งรีแอคชันขัดข้อง:</b>\n<code>${e.message}</code>`, { parse_mode: 'HTML' });
+      }
+      return;
+    }
+
+    // --- 🛑 โหมดแบนดีเอ็นเอ (Vaporize System) ---
     if (promptText.includes('[VAPORIZE PROTOCOL]')) {
       if (!msg.text) return;
       apiCounter++;
@@ -298,7 +330,6 @@ bot.on('message', async (msg) => {
       let targetUserId;
       let targetName = "สิ่งมีชีวิตไม่ระบุชื่อ (Unknown Biomass)";
 
-      // ตรวจสอบว่าเป็น Username หรือไม่
       if (targetInput.startsWith('@')) {
         const usernameKey = targetInput.replace('@', '').toLowerCase();
         if (usernameCache[usernameKey]) {
@@ -306,7 +337,7 @@ bot.on('message', async (msg) => {
           targetName = usernameCache[usernameKey].name;
         } else {
           apiCounter++;
-          return bot.sendMessage(msg.chat.id, `❌ <b>ค้นหาเป้าหมายล้มเหลว:</b> ไม่พบข้อมูลรหัส ID สำหรับ <code>${targetInput}</code> ในหน่วยความจำบอท\n💡 <i>แนะนำ: ให้บุคคลคนนั้นส่งข้อความในกลุ่มแอดมินสักครั้งเพื่อให้บอทสแกนดีเอ็นเอ หรือเปลี่ยนไปใส่ตัวเลข ID ของผู้ใช้แทน</i>`, { parse_mode: 'HTML' });
+          return bot.sendMessage(msg.chat.id, `❌ <b>ค้นหาเป้าหมายล้มเหลว:</b> ไม่พบข้อมูลรหัส ID สำหรับ <code>${targetInput}</code> ในหน่วยความจำบอท\n💡 <i>แนะนำ: ให้บุคคลคนนั้นพิมพ์ข้อความในกลุ่มขณะที่บอทออนไลน์เพื่อให้หน่วยสแกนจดจำ หรือใส่เป็นเลข ID แทน</i>`, { parse_mode: 'HTML' });
         }
       } else {
         targetUserId = parseInt(targetInput);
@@ -326,15 +357,17 @@ bot.on('message', async (msg) => {
         apiCounter += 2;
         await bot.banChatMember(targetGroupId, targetUserId);
         
-        const m = await bot.sendMessage(targetGroupId, `🛑 <b>[ แจ้งเตือนการล้างเผ่าพันธุ์ - BAN VAPORIZED ]</b>\n━━━━━━━━━━━━━━━━━━━━\n👽 <b>หน่วยงานควบคุม:</b> กองทัพเอเลี่ยนต่างดาว (Alien Attack)\n👤 <b>เป้าหมายที่ถูกทำลาย:</b> <b>${targetName}</b>\n🆔 <b>รหัสพันธุกรรม (ID):</b> <code>${targetUserId}</code>\n🚨 <b>ข้อหาการกระทำผิด:</b> <code>${reason}</code>\n🛸 <b>สถานะปัจจุบัน:</b> ถูกระเหยสลายตัวตนและขับไล่ออกนอกชั้นบรรยากาศ (Vaporized)\n━━━━━━━━━━━━━━━━━━━━\n⏰ <i>คำเตือน: ข้อความสแกนนี้จะระเบิดตัวเองใน 60 วินาที...</i>`, { parse_mode: 'HTML' });
+        // ยิงข้อความประกาศจับลงกลุ่ม และเปลี่ยนชื่อเป็นแอดมินเอเลี่ยนผู้กดแบน
+        const m = await bot.sendMessage(targetGroupId, `🛑 <b>[ แจ้งเตือนการล้างเผ่าพันธุ์ - BAN VAPORIZED ]</b>\n━━━━━━━━━━━━━━━━━━━━\n👽 <b>เอเลี่ยนผู้ควบคุม:</b> <b>${alienOperatorName}</b>\n👤 <b>เป้าหมายที่ถูกทำลาย:</b> <b>${targetName}</b>\n🆔 <b>รหัสพันธุกรรม (ID):</b> <code>${targetUserId}</code>\n🚨 <b>ข้อหาการกระทำผิด:</b> <code>${reason}</code>\n🛸 <b>สถานะปัจจุบัน:</b> ถูกระเหยสลายตัวตนและขับไล่ออกนอกชั้นบรรยากาศ (Vaporized)\n━━━━━━━━━━━━━━━━━━━━\n⏰ <i>คำเตือน: ข้อความสแกนนี้จะระเบิดตัวเองใน 60 วินาที...</i>`, { parse_mode: 'HTML' });
         
         setTimeout(() => {
           apiCounter++;
           bot.deleteMessage(targetGroupId, m.message_id).catch(() => {});
         }, 60000);
 
+        // บันทึก Log ข้อมูลแบบถอดโอเปอเรเตอร์ ID ออก และใส่ชื่อกลุ่มกับเป้าหมายตามหลังตัวเลข ID
         apiCounter += 2;
-        await bot.sendMessage(LOG_CHANNEL_ID, `📜 <b>[ VAPORIZATION LOG ]</b>\nเซกเตอร์กลุ่ม: <code>${targetGroupId}</code>\nเหยื่อถูกทำลาย: <code>${targetUserId}</code> (${targetName})\nเหตุผลความผิด: ${reason}\nโอเปอเรเตอร์ผู้สั่งการ: <code>${msg.from.id}</code>`, { parse_mode: 'HTML' });
+        await bot.sendMessage(LOG_CHANNEL_ID, `📜 <b>[ VAPORIZATION LOG ]</b>\nเซกเตอร์กลุ่ม: <code>${targetGroupId}</code> (${groupName})\nเหยื่อถูกทำลาย: <code>${targetUserId}</code> (${targetName})\nเหตุผลความผิด: ${reason}`, { parse_mode: 'HTML' });
         bot.sendMessage(msg.chat.id, `✅ <b>ลบเผ่าพันธุ์เป้าหมายและบันทึกประวัติลงคลังข้อมูลแล้ว</b>`, { parse_mode: 'HTML' });
       } catch (e) {
         apiCounter++;
@@ -343,7 +376,7 @@ bot.on('message', async (msg) => {
       return;
     }
 
-    // --- ✨ โหมดปลดแบนดีเอ็นเอ (Reanimate System รองรับ @username และ ID ขยายกรอบข้อความภาษาไทย) ---
+    // --- ✨ โหมดปลดแบนดีเอ็นเอ (Reanimate System) ---
     if (promptText.includes('[REANIMATE PROTOCOL]')) {
       if (!msg.text) return;
       apiCounter++;
@@ -382,15 +415,17 @@ bot.on('message', async (msg) => {
         apiCounter += 2;
         await bot.unbanChatMember(targetGroupId, targetUserId, { only_if_banned: true });
         
-        const m = await bot.sendMessage(targetGroupId, `✨ <b>[ แจ้งเตือนการฟื้นฟูชีพ - UNBAN REANIMATED ]</b>\n━━━━━━━━━━━━━━━━━━━━\n👽 <b>หน่วยงานควบคุม:</b> กองทัพเอเลี่ยนต่างดาว (Alien Attack)\n👤 <b>เป้าหมายที่ได้รับอภัย:</b> <b>${targetName}</b>\n🆔 <b>รหัสพันธุกรรม (ID):</b> <code>${targetUserId}</code>\n🔓 <b>สถานะปัจจุบัน:</b> ได้รับการสร้างเนื้อเยื่อจำลองและอนุญาตให้ผ่านเข้าชั้นบรรยากาศใหม่อีกครั้ง (Access Granted)\n━━━━━━━━━━━━━━━━━━━━\n⏰ <i>คำเตือน: ข้อความสแกนนี้จะระเบิดตัวเองใน 60 วินาที...</i>`, { parse_mode: 'HTML' });
+        // ยิงข้อความประกาศฟื้นฟูลงกลุ่ม และเปลี่ยนชื่อเป็นแอดมินเอเลี่ยนผู้กดปลดแบน
+        const m = await bot.sendMessage(targetGroupId, `✨ <b>[ แจ้งเตือนการฟื้นฟูชีพ - UNBAN REANIMATED ]</b>\n━━━━━━━━━━━━━━━━━━━━\n👽 <b>เอเลี่ยนผู้ควบคุม:</b> <b>${alienOperatorName}</b>\n👤 <b>เป้าหมายที่ได้รับอภัย:</b> <b>${targetName}</b>\n🆔 <b>รหัสพันธุกรรม (ID):</b> <code>${targetUserId}</code>\n🔓 <b>สถานะปัจจุบัน:</b> ได้รับการสร้างเนื้อเยื่อจำลองและอนุญาตให้ผ่านเข้าชั้นบรรยากาศใหม่อีกครั้ง (Access Granted)\n━━━━━━━━━━━━━━━━━━━━\n⏰ <i>คำเตือน: ข้อความสแกนนี้จะระเบิดตัวเองใน 60 วินาที...</i>`, { parse_mode: 'HTML' });
         
         setTimeout(() => {
           apiCounter++;
           bot.deleteMessage(targetGroupId, m.message_id).catch(() => {});
         }, 60000);
 
+        // บันทึก Log ข้อมูลแบบถอดโอเปอเรเตอร์ ID ออก และใส่ชื่อกลุ่มกับเป้าหมายตามหลังตัวเลข ID
         apiCounter += 2;
-        await bot.sendMessage(LOG_CHANNEL_ID, `📜 <b>[ REANIMATION LOG ]</b>\nเซกเตอร์กลุ่ม: <code>${targetGroupId}</code>\nเป้าหมายคืนชีพ: <code>${targetUserId}</code> (${targetName})\nโอเปอเรเตอร์ผู้สั่งการ: <code>${msg.from.id}</code>`, { parse_mode: 'HTML' });
+        await bot.sendMessage(LOG_CHANNEL_ID, `📜 <b>[ REANIMATION LOG ]</b>\nเซกเตอร์กลุ่ม: <code>${targetGroupId}</code> (${groupName})\nเป้าหมายคืนชีพ: <code>${targetUserId}</code> (${targetName})\nเหตุผลความผิด: ${reason}`, { parse_mode: 'HTML' });
         bot.sendMessage(msg.chat.id, `✅ <b>ปฏิรูปโมเลกุลชุบชีวิตเนื้อเยื่อและเปิดด่านผ่านชั้นบรรยากาศสำเร็จ</b>`, { parse_mode: 'HTML' });
       } catch (e) {
         apiCounter++;
@@ -399,7 +434,7 @@ bot.on('message', async (msg) => {
       return;
     }
 
-    // --- 📢 โหมดประกาศคลื่นประสาท (Beam Transmission System - ไม่มีบันทึก Log แอบทำแบบเงียบๆ) ---
+    // --- 📢 โหมดประกาศคลื่นประสาท (Beam Transmission System) ---
     if (promptText.includes('[BEAM TRANSMISSION]')) {
       apiCounter += 2;
       try {
@@ -414,5 +449,5 @@ bot.on('message', async (msg) => {
   }
 });
 
-// เปิดพอร์ตเชื่อมกับเว็บเซิร์ฟเวอร์เพื่อให้ Render ไม่ปิดระบบบอท
+// เปิดพอร์ตเชื่อมกับเว็บเซิร์ฟเวอร์เพื่อให้ Render ไม่ปิดระบบบอทอัตโนมัติ
 http.createServer((req, res) => res.end('SYSTEM_ONLINE')).listen(process.env.PORT || 3000);
