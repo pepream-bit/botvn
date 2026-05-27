@@ -25,12 +25,12 @@ if (process.env.TARGET_GROUPS) {
 
 // ตรวจสอบความพร้อมของระบบ
 if (!token || WHITELIST_IDS.length === 0 || TARGET_GROUPS.length === 0 || !LOG_CHANNEL_ID) {
-  console.error('❌ CRITICAL ERROR: Environment Variables missing or misconfigured!');
+  console.error('❌ CRITICAL ERROR: Interstellar Environment Variables missing!');
   process.exit(1);
 }
 
 const bot = new TelegramBot(token, { polling: true });
-console.log(`🛸 Alian Attack Engine Active! Operators: ${WHITELIST_IDS.length} | Sectors: ${TARGET_GROUPS.length}`);
+console.log(`🛸 Alien Invasion Engine Active! Overlords: ${WHITELIST_IDS.length} | Target Sectors: ${TARGET_GROUPS.length}`);
 
 // ==========================================
 // 1. เมนูหลัก Command Center
@@ -39,11 +39,8 @@ function sendMainMenu(chatId) {
   const keyboard = TARGET_GROUPS.map(g => [
     { text: `🛰️ Sector: ${g.name}`, callback_data: `select_group_${g.id}` }
   ]);
-  
-  // เพิ่มปุ่มดูดสื่อแบบไร้ร่องรอย (Stealth Mode)
-  keyboard.push([{ text: '🧲 Stealth Capture (URL)', callback_data: 'cmd_capture_url' }]);
 
-  bot.sendMessage(chatId, "🛸 <b>ALIAN ATTACK COMMAND CENTER</b>\nSelect operation:", {
+  bot.sendMessage(chatId, "🛸 <b>ALIEN INVASION COMMAND MOTHERBOARD</b>\nSelect target sector to manipulate:", {
     parse_mode: 'HTML',
     reply_markup: { inline_keyboard: keyboard }
   });
@@ -59,7 +56,7 @@ bot.onText(/\/start/, (msg) => {
 // ==========================================
 bot.on('callback_query', async (query) => {
   if (!WHITELIST_IDS.includes(query.from.id)) {
-    return bot.answerCallbackQuery(query.id, { text: 'ACCESS DENIED.', show_alert: true });
+    return bot.answerCallbackQuery(query.id, { text: 'ACCESS DENIED. USER NOT RECOGNIZED BY MOTHERBOARD.', show_alert: true });
   }
 
   const chatId = query.message.chat.id;
@@ -73,27 +70,29 @@ bot.on('callback_query', async (query) => {
     return bot.answerCallbackQuery(query.id);
   }
 
-  // เลือกกลุ่มและแสดงเมนูย่อย
+  // เลือกกลุ่มและแสดงเมนูย่อย (ย้าย Stealth Capture เข้ามาในนี้แล้ว)
   if (data.startsWith('select_group_')) {
     const groupId = data.replace('select_group_', '');
     const group = TARGET_GROUPS.find(g => g.id == groupId);
-    if (!group) return bot.answerCallbackQuery(query.id, { text: 'Sector Not Found.' });
+    if (!group) return bot.answerCallbackQuery(query.id, { text: 'Sector Not Found in Galaxy Map.' });
 
     const submenu = [
       [
-        // ปรับเปลี่ยนอิโมจิและคำให้ดุดัน เป็นทางการ
-        { text: '🛑 Purge (Ban)', callback_data: `opt_ban_${groupId}` },
-        { text: '✨ Restore (Unban)', callback_data: `opt_unban_${groupId}` }
+        { text: '🛑 Vaporize (Ban)', callback_data: `opt_ban_${groupId}` },
+        { text: '✨ Reanimate (Unban)', callback_data: `opt_unban_${groupId}` }
       ],
       [
-        { text: '📢 Transmit Media/Text', callback_data: `opt_ann_${groupId}` }
+        { text: '🧲 Tractor Beam (Stealth Capture)', callback_data: `cmd_capture_url_${groupId}` }
       ],
       [
-        { text: '⬅️ Back to Command Center', callback_data: 'back_to_main' }
+        { text: '📡 Beam Transmission', callback_data: `opt_ann_${groupId}` }
+      ],
+      [
+        { text: '⬅️ Back to Motherboard', callback_data: 'back_to_main' }
       ]
     ];
 
-    await bot.editMessageText(`🛰️ <b>Active Sector:</b> <code>${group.name}</code>\nSelect tactical operation:`, {
+    await bot.editMessageText(`🛸 <b>Target Sector Locked:</b> <code>${group.name}</code>\nSelect invasive protocol:`, {
       chat_id: chatId,
       message_id: messageId,
       parse_mode: 'HTML',
@@ -102,30 +101,31 @@ bot.on('callback_query', async (query) => {
     return bot.answerCallbackQuery(query.id);
   }
 
-  // เรียกโหมดดูดสื่อ (Stealth)
-  if (data === 'cmd_capture_url') {
-    bot.sendMessage(chatId, '🧲 <b>ENTER URL TO CAPTURE:</b>\nProvide the Telegram link (e.g. https://t.me/c/xxxx/xxxx):', {
+  // เรียกโหมดดูดสื่อประจำกลุ่ม (Stealth)
+  if (data.startsWith('cmd_capture_url_')) {
+    const groupId = data.replace('cmd_capture_url_', '');
+    bot.sendMessage(chatId, `🧲 <b>[QUANTUM TRACTOR BEAM] Sector:</b> <code>${groupId}</code>\nFeed the target Telegram link into the bio-scanner (e.g. https://t.me/c/xxxx/xxxx):`, {
       parse_mode: 'HTML', reply_markup: { force_reply: true }
     });
     return bot.answerCallbackQuery(query.id);
   }
 
-  // แจ้ง Force Reply ให้พิมพ์คำสั่ง
+  // แจ้ง Force Reply ให้พิมพ์คำสั่งตามโหมดต่างๆ
   if (data.startsWith('opt_')) {
     const parts = data.split('_');
     const action = parts[1];
     const groupId = parts[2];
     
     if (action === 'ban') {
-      bot.sendMessage(chatId, `🛑 <b>[BAN MODE] Sector:</b> <code>${groupId}</code>\nReply with: <code>ID Reason</code>`, {
+      bot.sendMessage(chatId, `🛑 <b>[VAPORIZE PROTOCOL] Sector:</b> <code>${groupId}</code>\nInput target identity to disintegrate: <code>ID Reason</code>`, {
         parse_mode: 'HTML', reply_markup: { force_reply: true }
       });
     } else if (action === 'unban') {
-      bot.sendMessage(chatId, `✨ <b>[UNBAN MODE] Sector:</b> <code>${groupId}</code>\nReply with: <code>ID Reason</code>`, {
+      bot.sendMessage(chatId, `✨ <b>[REANIMATE PROTOCOL] Sector:</b> <code>${groupId}</code>\nInput target identity to restore: <code>ID Reason</code>`, {
         parse_mode: 'HTML', reply_markup: { force_reply: true }
       });
     } else if (action === 'ann') {
-      bot.sendMessage(chatId, `📢 <b>[TRANSMIT MODE] Sector:</b> <code>${groupId}</code>\nSend media or text to broadcast natively:`, {
+      bot.sendMessage(chatId, `📡 <b>[BEAM TRANSMISSION] Sector:</b> <code>${groupId}</code>\nLoad text or media capsule to infect the neural network natively:`, {
         parse_mode: 'HTML', reply_markup: { force_reply: true }
       });
     }
@@ -144,8 +144,8 @@ bot.on('message', async (msg) => {
   if (msg.reply_to_message && msg.reply_to_message.text) {
     const promptText = msg.reply_to_message.text;
 
-    // --- 🧲 โหมดดูดสื่อไร้ร่องรอย (Stealth Capture System) ---
-    if (promptText.includes('ENTER URL TO CAPTURE')) {
+    // --- 🧲 โหมดดูดสื่อไร้ร่องรอยแยกแชทเดี่ยว (Quantum Tractor Beam) ---
+    if (promptText.includes('[QUANTUM TRACTOR BEAM]')) {
       if (!msg.text) return;
       try {
         const url = msg.text.trim();
@@ -165,13 +165,13 @@ bot.on('message', async (msg) => {
           targetChatId = "@" + username;
         }
 
-        if (!targetChatId || isNaN(messageId)) throw new Error("Invalid URL format.");
+        if (!targetChatId || isNaN(messageId)) throw new Error("Invalid Interstellar Coordinate Format.");
 
-        // ดึงสื่อตรงเข้าแชทส่วนตัว (ไม่มี Log / ไม่โผล่ในกลุ่ม)
-        await bot.copyMessage(msg.chat.id, targetChatId, messageId);
-        bot.sendMessage(msg.chat.id, '✅ <b>Capture complete (Stealth Mode).</b>', { parse_mode: 'HTML' });
+        // ดึงสื่อตรงเข้า Private Chat ของ Operator ผู้สั่งการโดยตรง (ส่งเข้า msg.from.id แยกแชทใครแชทมัน ไม่ปนกัน)
+        await bot.copyMessage(msg.from.id, targetChatId, messageId);
+        bot.sendMessage(msg.from.id, '🛸 <b>Extraction complete. Object secured in your private orbit. No telemetry logged.</b>', { parse_mode: 'HTML' });
       } catch (e) {
-        bot.sendMessage(msg.chat.id, `❌ <b>Capture failed:</b>\n<code>${e.message}</code>`, { parse_mode: 'HTML' });
+        bot.sendMessage(msg.from.id, `❌ <b>Extraction aborted by Motherboard:</b>\n<code>${e.message}</code>`, { parse_mode: 'HTML' });
       }
       return;
     }
@@ -181,67 +181,65 @@ bot.on('message', async (msg) => {
     if (!matchGroup) return;
     const targetGroupId = parseInt(matchGroup[1]);
 
-    // --- 🛑 โหมดแบน (Purge System) ---
-    if (promptText.includes('[BAN MODE]')) {
+    // --- 🛑 โหมดแบน (Vaporize System) ---
+    if (promptText.includes('[VAPORIZE PROTOCOL]')) {
       if (!msg.text) return;
       const args = msg.text.split(' ');
       const targetUserId = args[0];
-      const reason = args.slice(1).join(' ') || 'Protocol Violation';
+      const reason = args.slice(1).join(' ') || 'Organic Tissue Violation';
 
       if (!targetUserId || isNaN(targetUserId)) {
-        return bot.sendMessage(msg.chat.id, '❌ <b>Invalid Protocol:</b> ID must be numerical.');
+        return bot.sendMessage(msg.chat.id, '❌ <b>Invasive Failure:</b> Target ID must be numeric values.');
       }
 
       try {
         await bot.banChatMember(targetGroupId, targetUserId);
-        const m = await bot.sendMessage(targetGroupId, `🛑 <b>PURGED</b>\n🆔 <code>${targetUserId}</code>\n🚨 <b>Reason:</b> ${reason}`, { parse_mode: 'HTML' });
+        const m = await bot.sendMessage(targetGroupId, `🛑 <b>TARGET VAPORIZED</b>\n🆔 <code>${targetUserId}</code>\n🚨 <b>Protocol:</b> ${reason}`, { parse_mode: 'HTML' });
         setTimeout(() => bot.deleteMessage(targetGroupId, m.message_id).catch(() => {}), 60000);
 
-        await bot.sendMessage(LOG_CHANNEL_ID, `📜 <b>[ PURGE LOG ]</b>\nSector: <code>${targetGroupId}</code>\nTarget: <code>${targetUserId}</code>\nReason: ${reason}\nOperator: <code>${msg.from.id}</code>`, { parse_mode: 'HTML' });
-        bot.sendMessage(msg.chat.id, `✅ <b>Target successfully purged.</b>`, { parse_mode: 'HTML' });
+        await bot.sendMessage(LOG_CHANNEL_ID, `📜 <b>[ VAPORIZATION LOG ]</b>\nSector: <code>${targetGroupId}</code>\nTarget: <code>${targetUserId}</code>\nReason: ${reason}\nOperator: <code>${msg.from.id}</code>`, { parse_mode: 'HTML' });
+        bot.sendMessage(msg.chat.id, `✅ <b>Target successfully vaporized from existence.</b>`, { parse_mode: 'HTML' });
       } catch (e) {
-        bot.sendMessage(msg.chat.id, `⚠️ <b>Target already liquidated or system lacks permission.</b>\n<code>Info: ${e.message}</code>`, { parse_mode: 'HTML' });
+        bot.sendMessage(msg.chat.id, `⚠️ <b>Target immune or system lacks administrative clearance.</b>\n<code>Details: ${e.message}</code>`, { parse_mode: 'HTML' });
       }
       return;
     }
 
-    // --- ✨ โหมดปลดแบน (Restore System) ---
-    if (promptText.includes('[UNBAN MODE]')) {
+    // --- ✨ โหมดปลดแบน (Reanimate System) ---
+    if (promptText.includes('[REANIMATE PROTOCOL]')) {
       if (!msg.text) return;
       const args = msg.text.split(' ');
       const targetUserId = args[0];
-      const reason = args.slice(1).join(' ') || 'Restored by Operator';
+      const reason = args.slice(1).join(' ') || 'Re-allowed by Warlord';
 
       if (!targetUserId || isNaN(targetUserId)) {
-        return bot.sendMessage(msg.chat.id, '❌ <b>Invalid Protocol:</b> ID must be numerical.');
+        return bot.sendMessage(msg.chat.id, '❌ <b>Invasive Failure:</b> Target ID must be numeric values.');
       }
 
       try {
         await bot.unbanChatMember(targetGroupId, targetUserId, { only_if_banned: true });
-        const m = await bot.sendMessage(targetGroupId, `✨ <b>RESTORED</b>\n🆔 <code>${targetUserId}</code>\n🔓 <b>Access Granted</b>`, { parse_mode: 'HTML' });
+        const m = await bot.sendMessage(targetGroupId, `✨ <b>TARGET REANIMATED</b>\n🆔 <code>${targetUserId}</code>\n🔓 <b>Atmosphere Access Granted</b>`, { parse_mode: 'HTML' });
         setTimeout(() => bot.deleteMessage(targetGroupId, m.message_id).catch(() => {}), 60000);
 
-        await bot.sendMessage(LOG_CHANNEL_ID, `📜 <b>[ RESTORE LOG ]</b>\nSector: <code>${targetGroupId}</code>\nTarget: <code>${targetUserId}</code>\nOperator: <code>${msg.from.id}</code>`, { parse_mode: 'HTML' });
-        bot.sendMessage(msg.chat.id, `✅ <b>Target restored successfully.</b>`, { parse_mode: 'HTML' });
+        await bot.sendMessage(LOG_CHANNEL_ID, `📜 <b>[ REANIMATION LOG ]</b>\nSector: <code>${targetGroupId}</code>\nTarget: <code>${targetUserId}</code>\nOperator: <code>${msg.from.id}</code>`, { parse_mode: 'HTML' });
+        bot.sendMessage(msg.chat.id, `✅ <b>Target tissue reanimated successfully.</b>`, { parse_mode: 'HTML' });
       } catch (e) {
-        bot.sendMessage(msg.chat.id, `⚠️ <b>Unable to complete restoration.</b>\n<code>Info: ${e.message}</code>`, { parse_mode: 'HTML' });
+        bot.sendMessage(msg.chat.id, `⚠️ <b>Unable to patch target DNA structure.</b>\n<code>Details: ${e.message}</code>`, { parse_mode: 'HTML' });
       }
       return;
     }
 
-    // --- 📢 โหมดประกาศ (Transmit System) ---
-    if (promptText.includes('[TRANSMIT MODE]')) {
+    // --- 📢 โหมดประกาศ (Beam Transmission System - ปิด Log ถาวร) ---
+    if (promptText.includes('[BEAM TRANSMISSION]')) {
       try {
-        // ส่งข้อความ/สื่อตรงๆ ไปที่กลุ่ม (ไม่มีคำประกาศนำหน้า)
+        // ยิงข้อความ/สื่อตรงๆ ไปที่กลุ่มเป้าหมายทันที
         await bot.copyMessage(targetGroupId, msg.chat.id, msg.message_id);
         
-        // ส่ง Log การประกาศไปที่ Channel
-        await bot.sendMessage(LOG_CHANNEL_ID, `📜 <b>[ TRANSMISSION LOG ]</b>\nSector: <code>${targetGroupId}</code> | Operator: <code>${msg.from.id}</code>`, { parse_mode: 'HTML' });
-        await bot.copyMessage(LOG_CHANNEL_ID, msg.chat.id, msg.message_id);
+        // [ระบบ LOG ถูกตัดออกเพื่อความปลอดภัยแบบไร้ร่องรอย]
         
-        bot.sendMessage(msg.chat.id, `✨ <b>Transmission broadcasted natively.</b>`, { parse_mode: 'HTML' });
+        bot.sendMessage(msg.chat.id, `📡 <b>Signal beamed natively into Sector neural network. Telemetry wiped.</b>`, { parse_mode: 'HTML' });
       } catch (e) {
-        bot.sendMessage(msg.chat.id, `❌ <b>Transmission failed:</b>\n<code>${e.message}</code>`, { parse_mode: 'HTML' });
+        bot.sendMessage(msg.chat.id, `❌ <b>Transmission deflected:</b>\n<code>${e.message}</code>`, { parse_mode: 'HTML' });
       }
       return;
     }
@@ -249,4 +247,4 @@ bot.on('message', async (msg) => {
 });
 
 // เปิดพอร์ตเชื่อมกับเว็บเซิร์ฟเวอร์เพื่อให้ Render ไม่ปิดระบบบอท
-http.createServer((req, res) => res.end('OK')).listen(process.env.PORT || 3000);
+http.createServer((req, res) => res.end('SYSTEM_ONLINE')).listen(process.env.PORT || 3000);
