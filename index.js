@@ -1,11 +1,11 @@
 const TelegramBot = require('node-telegram-bot-api');
 const http = require('http');
-const mongoose = require('mongoose'); // 💽 เปลี่ยนมาใช้ฐานข้อมูล MongoDB แทนไฟล์ธรรมดา
+const mongoose = require('mongoose');
 
 // 🛡️ ระบบตั้งค่า & ตัวแปรความปลอดภัยจาก Render
 const token = process.env.BOT_TOKEN;
 const LOG_CHANNEL_ID = parseInt(process.env.LOG_CHANNEL_ID);
-const mongoUri = process.env.MONGODB_URI; // ลิงก์เชื่อมต่อฐานข้อมูลจาก Render Environment
+const mongoUri = process.env.MONGODB_URI; 
 
 // ตรวจสอบความพร้อมของระบบ
 if (!token || !LOG_CHANNEL_ID || !mongoUri) {
@@ -45,7 +45,7 @@ const API_DAILY_MAX = 50000;
 const monitorSessions = new Map();
 
 function getTodayDate() {
-  return new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+  return new Date().toISOString().slice(0, 10); 
 }
 
 // 📂 ฟังก์ชันโหลดและบันทึกข้อมูลถาวรผ่าน MongoDB
@@ -79,7 +79,6 @@ async function saveDailyData() {
   }
 }
 
-// โหลดข้อมูลตอนเริ่มระบบ
 loadDailyData();
 
 // ตั้ง Timer รีเซตอัตโนมัติทุกเที่ยงคืน
@@ -98,20 +97,20 @@ function scheduleMidnightReset() {
 }
 scheduleMidnightReset();
 
-// 👥 ระบบ Whitelist (คั่นด้วยลูกน้ำ เช่น 12345,67890)
+// 👥 ระบบ Whitelist
 const WHITELIST_IDS = process.env.WHITELIST_IDS 
   ? process.env.WHITELIST_IDS.split(',').map(id => parseInt(id.trim())) 
   : [];
 
-// 🛰️ ระบบ Multi-Group (รูปแบบ: ID:ชื่อ,ID:ชื่อ)
+// 🛰️ ระบบ Multi-Group [FIXED BUG: ไม่ใช้ parseInt เพื่อป้องกัน Error จาก Username Group]
 const TARGET_GROUPS = [];
 if (process.env.TARGET_GROUPS) {
   process.env.TARGET_GROUPS.split(',').forEach(item => {
     const parts = item.split(':');
     if (parts.length >= 2) {
-      const id = parts[0].trim();
+      const id = parts[0].trim(); // ปล่อยเป็น String เพื่อรองรับทั้ง ID ติดลบและ @username
       const name = parts.slice(1).join(':').trim();
-      TARGET_GROUPS.push({ id: parseInt(id), name: name });
+      TARGET_GROUPS.push({ id: id, name: name });
     }
   });
 }
@@ -122,7 +121,7 @@ if (WHITELIST_IDS.length === 0 || TARGET_GROUPS.length === 0) {
 }
 
 const bot = new TelegramBot(token, { polling: true });
-console.log(` UFO Alien Invasion Engine Active! Overlords: ${WHITELIST_IDS.length} | Target Sectors: ${TARGET_GROUPS.length}`);
+console.log(`🛸 UFO Alien Invasion Engine Active! Overlords: ${WHITELIST_IDS.length} | Target Sectors: ${TARGET_GROUPS.length}`);
 
 // ==========================================
 // 🔧 ฟังก์ชันช่วยระบบ Warn & Utilities
@@ -217,7 +216,7 @@ function sendMainMenu(chatId, messageId = null) {
 }
 
 function restoreSubmenu(chatId, messageId, groupId) {
-  const group = TARGET_GROUPS.find(g => g.id == groupId);
+  const group = TARGET_GROUPS.find(g => g.id == groupId); // ใช้ == เทียบ String/Number
   if (!group) return;
 
   const submenu = [
@@ -259,7 +258,7 @@ bot.onText(/\/start/, (msg) => {
 });
 
 // ==========================================
-// 2. จัดการปุ่มกด (Inline Keyboard & TV Mode Switch)
+// 2. จัดการปุ่มกด (Inline Keyboard)
 // ==========================================
 bot.on('callback_query', async (query) => {
   if (!WHITELIST_IDS.includes(query.from.id)) {
@@ -369,9 +368,10 @@ bot.on('callback_query', async (query) => {
 });
 
 // ==========================================
-// 3. ระบบประมวลผลข้อความผ่านเซสชัน (โหมดทีวีไร้ขยะ)
+// 3. ระบบประมวลผลข้อความผ่านเซสชัน
 // ==========================================
 bot.on('message', async (msg) => {
+  // บันทึกโปรไฟล์ลง Cache เสมอ เพื่อให้ค้นหาชื่อเป้าหมายได้
   if (msg.from) {
     const fullName = `${msg.from.first_name || ''} ${msg.from.last_name || ''}`.trim() || msg.from.username || `ID:${msg.from.id}`;
     const idKey = `id_${msg.from.id}`;
@@ -382,21 +382,26 @@ bot.on('message', async (msg) => {
     }
   }
 
+  // อนุญาตเฉพาะคนใน Whitelist
   if (!WHITELIST_IDS.includes(msg.from.id)) return;
+
+  // 🛡️ [FIXED BUG]: บล็อกการอ่านข้อความจาก "ในกลุ่ม" ป้องกันบอทดึงผิดแชทเวลา Operator พิมพ์ในกลุ่ม
+  if (msg.chat.type !== 'private') return; 
+
   if (msg.text && msg.text.startsWith('/start')) return;
 
   const session = monitorSessions.get(msg.from.id);
   if (!session) return;
+  
   if (!msg.text && session.action !== 'ann') return;
 
   const { chatId, messageId, groupId, action } = session;
-  const targetGroupId = parseInt(groupId);
-  const groupObj = TARGET_GROUPS.find(g => g.id === targetGroupId);
+  const targetGroupId = groupId; // 🛡️ [FIXED BUG]: ลบ parseInt ออก เพื่อรักษาโครงสร้าง @username
+  const groupObj = TARGET_GROUPS.find(g => g.id == targetGroupId);
   const groupName = groupObj ? groupObj.name : 'ไม่ระบุกลุ่ม';
   
   const inputStr = msg.text ? msg.text.trim() : '';
 
-  // 🔥 [FIXED BUG] ลบข้อความอินพุตทันที ยกเว้นโหมด 'ann' ที่ต้องเก็บไว้ Copy ก่อนลบด้านล่าง
   if (action !== 'ann') {
     bot.deleteMessage(msg.chat.id, msg.message_id).catch(() => {});
   }
@@ -418,7 +423,7 @@ bot.on('message', async (msg) => {
         if (inputStr.includes('/c/')) {
           const parts = inputStr.split('/');
           mId = parseInt(parts.pop());
-          tChatId = parseInt("-100" + parts.pop());
+          tChatId = "-100" + parts.pop(); // เปลี่ยนเป็น String รักษาความแม่นยำ
         } else {
           const parts = inputStr.split('/');
           mId = parseInt(parts.pop());
@@ -587,19 +592,17 @@ bot.on('message', async (msg) => {
 
         const url = inputStr.substring(0, spaceIdx).trim();
         const replyText = inputStr.substring(spaceIdx).trim();
-        let tChatId, mId;
+        let mId;
 
         if (url.includes('/c/')) {
           const parts = url.split('/');
           mId = parseInt(parts.pop());
-          tChatId = parseInt("-100" + parts.pop());
         } else {
           const parts = url.split('/');
           mId = parseInt(parts.pop());
-          tChatId = "@" + parts.pop();
         }
 
-        if (!tChatId || isNaN(mId)) throw new Error("รูปแบบพิกัดข้อความไม่สมบูรณ์");
+        if (isNaN(mId)) throw new Error("รูปแบบพิกัดข้อความไม่สมบูรณ์");
 
         apiCounter += 2;
         await saveDailyData();
@@ -687,14 +690,14 @@ bot.on('message', async (msg) => {
       await saveDailyData();
       monitorSessions.delete(msg.from.id);
       try {
-        // 🔥 ทำการคัดลอกไฟล์สื่อ วิดีโอ หรือข้อความไปยังกลุ่มเป้าหมายก่อน
         await bot.copyMessage(targetGroupId, msg.chat.id, msg.message_id);
         
-        // 🔥 เมื่อคัดลอกสำเร็จแล้ว ค่อยทำการลบอินพุตของ Operator เพื่อความสะอาดหน้าจอทีวี
+        // ลบข้อความอินพุตเมื่อส่งสำเร็จ
         bot.deleteMessage(msg.chat.id, msg.message_id).catch(() => {});
         
         bot.editMessageText(`📡 <b>ฝังตัวรับส่งสัญญาณเข้ากลุ่มสำเร็จ!</b>\n\n🛰️ <i>กำลังกลับสู่หน้าควบคุมหลัก...</i>`, { chat_id: chatId, message_id: messageId, parse_mode: 'HTML' }).catch(()=>{});
       } catch (e) {
+        // หากส่งไม่สำเร็จ บอทจะแจ้งสาเหตุที่หน้าจอเพื่อให้แก้ไขได้ถูกจุด
         bot.editMessageText(`❌ <b>ส่งไม่สำเร็จ:</b> <code>${e.message}</code>\n\n🛰️ <i>กำลังกลับสู่หน้าควบคุมหลัก...</i>`, { chat_id: chatId, message_id: messageId, parse_mode: 'HTML' }).catch(()=>{});
       }
       setTimeout(() => { restoreSubmenu(chatId, messageId, groupId); }, 2500);
@@ -702,5 +705,4 @@ bot.on('message', async (msg) => {
   }
 });
 
-// เปิดพอร์ตเชื่อมกับเว็บเซิร์ฟเวอร์เพื่อให้ Render ไม่ปิดระบบบอท
 http.createServer((req, res) => res.end('SYSTEM_ONLINE')).listen(process.env.PORT || 3000);
