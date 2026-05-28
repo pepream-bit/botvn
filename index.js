@@ -172,7 +172,7 @@ async function resolveName(userId, groupId) {
 }
 
 // ==========================================
-// 1. เมนูหลัก Command Center
+// 1. เมนูหลัก Command Center (ระบบจอทีวี)
 // ==========================================
 function sendMainMenu(chatId, messageId = null) {
   apiCounter++;
@@ -238,7 +238,7 @@ bot.onText(/\/start/, (msg) => {
 });
 
 // ==========================================
-// 2. จัดการปุ่มกด (Inline Keyboard & State Trigger)
+// 2. จัดการปุ่มกด (Inline Keyboard & TV Mode Switch)
 // ==========================================
 bot.on('callback_query', async (query) => {
   if (!WHITELIST_IDS.includes(query.from.id)) {
@@ -265,17 +265,23 @@ bot.on('callback_query', async (query) => {
     return bot.answerCallbackQuery(query.id);
   }
 
-  // ดูสถานะ API
+  // ดูสถานะ API (ปรับเป็นโหมดทีวี)
   if (data === 'view_api_limits') {
     apiCounter += 2;
     const pct = Math.min(100, Math.round((apiCounter / API_DAILY_MAX) * 100));
     const bars = Math.round(pct / 10);
     const barStr = "🟩".repeat(bars) + "⬜".repeat(10 - bars);
-    await bot.sendMessage(chatId, `📊 <b>เครื่องตรวจวัดพลังงานสัญญาณขีดจำกัด API</b>\n\nหลอดพลังงาน: [<code>${barStr}</code>] ${pct}%\nดึงสัญญาณไปแล้ว: <code>${apiCounter}</code> / <code>${API_DAILY_MAX}</code> ครั้ง\n\n⚠️ <i>คำเตือน: โปรดควบคุมการยิงสัญญานไม่ให้ทะลุ 100% เพื่อป้องกันระบบป้องกันของ Telegram ตรวจจับ</i>`, { parse_mode: 'HTML' });
+    
+    bot.editMessageText(`📊 <b>เครื่องตรวจวัดพลังงานสัญญาณขีดจำกัด API</b>\n\nหลอดพลังงาน: [<code>${barStr}</code>] ${pct}%\nดึงสัญญาณไปแล้ว: <code>${apiCounter}</code> / <code>${API_DAILY_MAX}</code> ครั้ง\n\n⚠️ <i>คำเตือน: โปรดควบคุมการยิงสัญญานไม่ให้ทะลุ 100% เพื่อป้องกันระบบป้องกันของ Telegram ตรวจจับ</i>`, {
+      chat_id: chatId,
+      message_id: messageId,
+      parse_mode: 'HTML',
+      reply_markup: { inline_keyboard: [[{ text: '⬅️ กลับสู่แผงควบคุมหลัก', callback_data: 'back_to_main' }]] }
+    }).catch(()=>{});
     return bot.answerCallbackQuery(query.id);
   }
 
-  // ดูรายชื่อ Whitelist
+  // ดูรายชื่อ Whitelist (ปรับเป็นโหมดทีวี)
   if (data === 'view_whitelist') {
     apiCounter += 2;
     let whitelistMessage = `👥 <b>รายชื่อโอเปอเรเตอร์ผู้ควบคุมยานแม่ (Whitelist)</b>\n━━━━━━━━━━━━━━━━━━━━\n`;
@@ -287,7 +293,13 @@ bot.on('callback_query', async (query) => {
       whitelistMessage += `${idx + 1}. 🆔 <code>${id}</code> [${name}]\n`;
     });
     whitelistMessage += `━━━━━━━━━━━━━━━━━━━━\n🛸 <i>สิทธิ์ในการสั่งการและแก้ไขชั้นบรรยากาศสูงสุด</i>`;
-    await bot.sendMessage(chatId, whitelistMessage, { parse_mode: 'HTML' });
+    
+    bot.editMessageText(whitelistMessage, {
+      chat_id: chatId,
+      message_id: messageId,
+      parse_mode: 'HTML',
+      reply_markup: { inline_keyboard: [[{ text: '⬅️ กลับสู่แผงควบคุมหลัก', callback_data: 'back_to_main' }]] }
+    }).catch(()=>{});
     return bot.answerCallbackQuery(query.id);
   }
 
@@ -337,7 +349,7 @@ bot.on('callback_query', async (query) => {
 });
 
 // ==========================================
-// 3. ระบบประมวลผลสัญญาณข้อความผ่าน Session
+// 3. ระบบประมวลผลข้อความผ่านเซสชัน (โหมดทีวีไร้ขยะ)
 // ==========================================
 bot.on('message', async (msg) => {
   // 🛰️ ตรวจสแกนดีเอ็นเอผู้ส่งสารทุกคนในกลุ่ม (ทำเสมอเพื่อเก็บ Cache)
@@ -368,7 +380,7 @@ bot.on('message', async (msg) => {
   
   const inputStr = msg.text ? msg.text.trim() : '';
 
-  // ลบข้อความที่ผู้ใช้พิมพ์เข้ามาเพื่อให้แชทสะอาด
+  // ลบข้อความอินพุตที่ผู้ใช้พิมพ์เข้ามาทันทีเพื่อให้แชทฝั่ง Operator สะอาดเหมือนหน้าจอทีวี
   bot.deleteMessage(msg.chat.id, msg.message_id).catch(() => {});
 
   let targetInput = '';
@@ -378,10 +390,14 @@ bot.on('message', async (msg) => {
 
   switch (action) {
     // ==========================================
-    // 🧲 โหมดดูดสื่อไร้ร่องรอย
+    // 🧲 โหมดดูดสื่อไร้ร่องรอย (แบบดึงเดี่ยวปกติสไตล์ทีวี)
     // ==========================================
     case 'capture_url':
       apiCounter++;
+      // อัปเดตสถานะที่หน้าจอหลักก่อน
+      bot.editMessageText(`⏳ <b>[QUANTUM TRACTOR BEAM]</b>\nกำลังเดินเครื่องดูดกลืนข้อมูลสัญญาณ... โปรดรอสักครู่`, { chat_id: chatId, message_id: messageId, parse_mode: 'HTML' }).catch(()=>{});
+      monitorSessions.delete(msg.from.id);
+
       try {
         let tChatId, mId;
         if (inputStr.includes('/c/')) {
@@ -397,11 +413,14 @@ bot.on('message', async (msg) => {
         
         apiCounter += 2;
         await bot.copyMessage(msg.from.id, tChatId, mId);
-        bot.sendMessage(msg.from.id, '🛸 ดึงสื่อสำเร็จ ส่งเข้าแชทส่วนตัวแล้ว', { parse_mode: 'HTML' });
+        
+        bot.editMessageText(`🛸 <b>ดึงสื่อสำเร็จ</b>\nระบบส่งเข้าห้องข้อความส่วนตัวของท่านเรียบร้อยแล้ว\n\n🛰️ <i>กำลังกลับสู่หน้าควบคุมหลัก...</i>`, { chat_id: chatId, message_id: messageId, parse_mode: 'HTML' }).catch(()=>{});
       } catch (e) {
         apiCounter++;
-        bot.sendMessage(msg.from.id, `❌ ดึงสื่อไม่สำเร็จ: <code>${e.message}</code>`, { parse_mode: 'HTML' });
+        bot.editMessageText(`❌ <b>ดึงสื่อไม่สำเร็จ:</b> <code>${e.message}</code>\n\n🛰️ <i>กำลังกลับสู่หน้าควบคุมหลัก...</i>`, { chat_id: chatId, message_id: messageId, parse_mode: 'HTML' }).catch(()=>{});
       }
+      
+      setTimeout(() => { restoreSubmenu(chatId, messageId, groupId); }, 2500);
       break;
 
     // ==========================================
@@ -414,9 +433,15 @@ bot.on('message', async (msg) => {
       reason = spaceIdx === -1 ? 'ตรวจพบพฤติกรรมเบี่ยงเบนจากโปรโตคอลกองทัพเอเลี่ยน' : inputStr.substring(spaceIdx + 1).trim() || 'ตรวจพบพฤติกรรมเบี่ยงเบนจากโปรโตคอลกองทัพเอเลี่ยน';
 
       resolved = resolveTarget(targetInput);
-      if (resolved.error) { bot.sendMessage(msg.chat.id, resolved.error, { parse_mode: 'HTML' }); break; }
+      if (resolved.error) { 
+        bot.editMessageText(`${resolved.error}\n\n🛰️ <i>กำลังกลับสู่หน้าควบคุมหลัก...</i>`, { chat_id: chatId, message_id: messageId, parse_mode: 'HTML' }).catch(()=>{});
+        monitorSessions.delete(msg.from.id);
+        setTimeout(() => { restoreSubmenu(chatId, messageId, groupId); }, 3000);
+        break; 
+      }
       targetUserId = resolved.userId;
       targetName = resolved.name || await resolveName(targetUserId, targetGroupId);
+      monitorSessions.delete(msg.from.id);
 
       try {
         const currentWarn = addWarn(targetGroupId, targetUserId);
@@ -439,7 +464,7 @@ bot.on('message', async (msg) => {
             `📜 <b>[ AUTO-BAN LOG ]</b>\nกลุ่ม: ${groupName}\nเป้าหมาย: ${targetName} (<code>${targetUserId}</code>)\nสาเหตุ: ${reason} | Warn ครบ ${WARN_LIMIT}`,
             { parse_mode: 'HTML' }
           );
-          bot.sendMessage(msg.chat.id, `☢️ Warn ครบ ${WARN_LIMIT}/${WARN_LIMIT} — แบนอัตโนมัติแล้ว`, { parse_mode: 'HTML' });
+          bot.editMessageText(`☢️ <b>Warn ครบ ${WARN_LIMIT}/${WARN_LIMIT}</b>\nระบบทำการระเบิดแบนเป้าหมายอัตโนมัติสำเร็จ!\n\n🛰️ <i>กำลังกลับสู่หน้าควบคุมหลัก...</i>`, { chat_id: chatId, message_id: messageId, parse_mode: 'HTML' }).catch(()=>{});
         } else {
           apiCounter += 3;
           const remaining = WARN_LIMIT - currentWarn;
@@ -453,11 +478,12 @@ bot.on('message', async (msg) => {
             `📜 <b>[ WARN LOG ]</b>\nกลุ่ม: ${groupName}\nเป้าหมาย: ${targetName} (<code>${targetUserId}</code>) | ${currentWarn}/${WARN_LIMIT}\nสาเหตุ: ${reason}`,
             { parse_mode: 'HTML' }
           );
-          bot.sendMessage(msg.chat.id, `☢️ Warn สำเร็จ ${currentWarn}/${WARN_LIMIT} (เหลืออีก ${remaining} ครั้ง)`, { parse_mode: 'HTML' });
+          bot.editMessageText(`☢️ <b>Warn สำเร็จ [${currentWarn}/${WARN_LIMIT}]</b>\nเป้าหมายเหลือโอกาสอีก ${remaining} ครั้ง\n\n🛰️ <i>กำลังกลับสู่หน้าควบคุมหลัก...</i>`, { chat_id: chatId, message_id: messageId, parse_mode: 'HTML' }).catch(()=>{});
         }
       } catch (e) {
-        bot.sendMessage(msg.chat.id, `⚠️ ระบบ Warn ขัดข้อง: <code>${e.message}</code>`, { parse_mode: 'HTML' });
+        bot.editMessageText(`⚠️ <b>ระบบ Warn ขัดข้อง:</b> <code>${e.message}</code>\n\n🛰️ <i>กำลังกลับสู่หน้าควบคุมหลัก...</i>`, { chat_id: chatId, message_id: messageId, parse_mode: 'HTML' }).catch(()=>{});
       }
+      setTimeout(() => { restoreSubmenu(chatId, messageId, groupId); }, 2500);
       break;
 
     // ==========================================
@@ -470,12 +496,22 @@ bot.on('message', async (msg) => {
       reason = spaceIdx === -1 ? 'ได้รับการล้างพิษจากศูนย์ควบคุมยานแม่' : inputStr.substring(spaceIdx + 1).trim() || 'ได้รับการล้างพิษจากศูนย์ควบคุมยานแม่';
 
       resolved = resolveTarget(targetInput);
-      if (resolved.error) { bot.sendMessage(msg.chat.id, resolved.error, { parse_mode: 'HTML' }); break; }
+      if (resolved.error) { 
+        bot.editMessageText(`${resolved.error}\n\n🛰️ <i>กำลังกลับสู่หน้าควบคุมหลัก...</i>`, { chat_id: chatId, message_id: messageId, parse_mode: 'HTML' }).catch(()=>{});
+        monitorSessions.delete(msg.from.id);
+        setTimeout(() => { restoreSubmenu(chatId, messageId, groupId); }, 3000);
+        break; 
+      }
       targetUserId = resolved.userId;
       targetName = resolved.name || await resolveName(targetUserId, targetGroupId);
+      monitorSessions.delete(msg.from.id);
 
       const prevWarn = getWarnCount(targetGroupId, targetUserId);
-      if (prevWarn === 0) { bot.sendMessage(msg.chat.id, `🧬 เป้าหมายไม่มี Warn อยู่แล้ว`, { parse_mode: 'HTML' }); break; }
+      if (prevWarn === 0) { 
+        bot.editMessageText(`🧬 <b>เป้าหมายไม่มีค่ารังสีพิษ (Warn) สะสมอยู่แล้ว</b>\n\n🛰️ <i>กำลังกลับสู่หน้าควบคุมหลัก...</i>`, { chat_id: chatId, message_id: messageId, parse_mode: 'HTML' }).catch(()=>{});
+        setTimeout(() => { restoreSubmenu(chatId, messageId, groupId); }, 2500);
+        break; 
+      }
 
       const newWarn = removeWarn(targetGroupId, targetUserId);
       saveDailyData();
@@ -493,31 +529,41 @@ bot.on('message', async (msg) => {
           `📜 <b>[ UNWARN LOG ]</b>\nกลุ่ม: ${groupName}\nเป้าหมาย: ${targetName} (<code>${targetUserId}</code>) | ${prevWarn} → ${newWarn}\nหมายเหตุ: ${reason}`,
           { parse_mode: 'HTML' }
         );
-        bot.sendMessage(msg.chat.id, `🧬 Unwarn สำเร็จ! รังสีเหลือ ${newWarn}/${WARN_LIMIT}`, { parse_mode: 'HTML' });
+        bot.editMessageText(`🧬 <b>ถอนพิษ Unwarn สำเร็จ!</b>\nระดับรังสีเป้าหมายลดลงเหลือ [${newWarn}/${WARN_LIMIT}]\n\n🛰️ <i>กำลังกลับสู่หน้าควบคุมหลัก...</i>`, { chat_id: chatId, message_id: messageId, parse_mode: 'HTML' }).catch(()=>{});
       } catch (e) {
-        bot.sendMessage(msg.chat.id, `⚠️ Unwarn ขัดข้อง: <code>${e.message}</code>`, { parse_mode: 'HTML' });
+        bot.editMessageText(`⚠️ <b>Unwarn ขัดข้อง:</b> <code>${e.message}</code>\n\n🛰️ <i>กำลังกลับสู่หน้าควบคุมหลัก...</i>`, { chat_id: chatId, message_id: messageId, parse_mode: 'HTML' }).catch(()=>{});
       }
+      setTimeout(() => { restoreSubmenu(chatId, messageId, groupId); }, 2500);
       break;
 
     // ==========================================
-    // 🔬 โหมดสแกนระดับรังสี
+    // 🔬 โหมดสแกนระดับรังสี (หน้าจอแสดงค่าค้างไว้ พร้อมปุ่มกดกลับเมนูแมนนวล)
     // ==========================================
     case 'warncheck':
       apiCounter++;
       targetInput = inputStr.split(' ')[0];
       resolved = resolveTarget(targetInput);
-      if (resolved.error) { bot.sendMessage(msg.chat.id, resolved.error, { parse_mode: 'HTML' }); break; }
+      if (resolved.error) { 
+        bot.editMessageText(`${resolved.error}\n\n🛰️ <i>กำลังกลับสู่หน้าควบคุมหลัก...</i>`, { chat_id: chatId, message_id: messageId, parse_mode: 'HTML' }).catch(()=>{});
+        monitorSessions.delete(msg.from.id);
+        setTimeout(() => { restoreSubmenu(chatId, messageId, groupId); }, 3000);
+        break; 
+      }
       targetUserId = resolved.userId;
       targetName = resolved.name || await resolveName(targetUserId, targetGroupId);
+      monitorSessions.delete(msg.from.id);
 
       const currentW = getWarnCount(targetGroupId, targetUserId);
       const cBar = buildWarnBar(currentW, WARN_LIMIT);
       const statusText = currentW === 0 ? '✅ ไม่พบรังสีสะสม' : currentW >= WARN_LIMIT ? '🚨 ระดับวิกฤต! อยู่ในขั้นถูกแบน' : `⚠️ มีรังสีสะสม — อีก ${WARN_LIMIT - currentW} ครั้งจะถูกแบน`;
 
-      bot.sendMessage(msg.chat.id,
-        `🔬 <b>[ RADIATION SCAN ]</b>\n👤 ${targetName} (<code>${targetUserId}</code>)\n🛰️ กลุ่ม: ${groupName}\n☢️ รังสี: [${cBar}] ${currentW}/${WARN_LIMIT}\n📡 สถานะ: ${statusText}`,
-        { parse_mode: 'HTML' }
-      );
+      // แสดงค่าผลสแกนค้างไว้บนจอทีวี พร้อมปุ่มให้ผู้ใช้อ่านเสร็จแล้วกดกลับเองแบบแอปพลิเคชัน
+      bot.editMessageText(`🔬 <b>[ RADIATION SCANNER REPORT ]</b>\n━━━━━━━━━━━━━━━━━━━━\n👤 <b>เป้าหมาย:</b> ${targetName} (<code>${targetUserId}</code>)\n🛰️ <b>เซกเตอร์:</b> ${groupName}\n☢️ <b>ระดับรังสี:</b> [${cBar}] ${currentW}/${WARN_LIMIT}\n📡 <b>สถานะคลื่น:</b> ${statusText}\n━━━━━━━━━━━━━━━━━━━━`, {
+        chat_id: chatId,
+        message_id: messageId,
+        parse_mode: 'HTML',
+        reply_markup: { inline_keyboard: [[{ text: '⬅️ กลับสู่แผงควบคุมเซกเตอร์', callback_data: `select_group_${groupId}` }]] }
+      }).catch(()=>{});
       break;
 
     // ==========================================
@@ -525,6 +571,7 @@ bot.on('message', async (msg) => {
     // ==========================================
     case 'replylink':
       apiCounter++;
+      monitorSessions.delete(msg.from.id);
       try {
         spaceIdx = inputStr.indexOf(' ');
         if (spaceIdx === -1) throw new Error("โปรดเคาะเว้นวรรคหลังลิงก์แล้วตามด้วยข้อความที่จะใช้ตอบกลับ");
@@ -547,10 +594,11 @@ bot.on('message', async (msg) => {
 
         apiCounter += 2;
         await bot.sendMessage(targetGroupId, replyText, { reply_to_message_id: mId });
-        bot.sendMessage(msg.chat.id, `📡 ตอบกลับข้อความสำเร็จ`, { parse_mode: 'HTML' });
+        bot.editMessageText(`📡 <b>ยิงคลื่นสัญญาณประสาทตอบกลับสำเร็จ!</b>\n\n🛰️ <i>กำลังกลับสู่หน้าควบคุมหลัก...</i>`, { chat_id: chatId, message_id: messageId, parse_mode: 'HTML' }).catch(()=>{});
       } catch (e) {
-        bot.sendMessage(msg.chat.id, `❌ ตอบกลับไม่สำเร็จ: <code>${e.message}</code>`, { parse_mode: 'HTML' });
+        bot.editMessageText(`❌ <b>ตอบกลับไม่สำเร็จ:</b> <code>${e.message}</code>\n\n🛰️ <i>กำลังกลับสู่หน้าควบคุมหลัก...</i>`, { chat_id: chatId, message_id: messageId, parse_mode: 'HTML' }).catch(()=>{});
       }
+      setTimeout(() => { restoreSubmenu(chatId, messageId, groupId); }, 2500);
       break;
 
     // ==========================================
@@ -563,9 +611,15 @@ bot.on('message', async (msg) => {
       reason = spaceIdx === -1 ? 'ตรวจพบการขัดขวางและต่อต้านกองทัพเอเลี่ยน' : inputStr.substring(spaceIdx + 1).trim() || 'ตรวจพบการขัดขวางและต่อต้านกองทัพเอเลี่ยน';
 
       resolved = resolveTarget(targetInput);
-      if (resolved.error) { bot.sendMessage(msg.chat.id, resolved.error, { parse_mode: 'HTML' }); break; }
+      if (resolved.error) { 
+        bot.editMessageText(`${resolved.error}\n\n🛰️ <i>กำลังกลับสู่หน้าควบคุมหลัก...</i>`, { chat_id: chatId, message_id: messageId, parse_mode: 'HTML' }).catch(()=>{});
+        monitorSessions.delete(msg.from.id);
+        setTimeout(() => { restoreSubmenu(chatId, messageId, groupId); }, 3000);
+        break; 
+      }
       targetUserId = resolved.userId;
       targetName = resolved.name || await resolveName(targetUserId, targetGroupId);
+      monitorSessions.delete(msg.from.id);
 
       try {
         apiCounter += 2;
@@ -577,10 +631,11 @@ bot.on('message', async (msg) => {
         setTimeout(() => { bot.deleteMessage(targetGroupId, m.message_id).catch(() => {}); }, 60000);
 
         await bot.sendMessage(LOG_CHANNEL_ID, `📜 <b>[ BAN LOG ]</b>\nกลุ่ม: ${groupName}\nเป้าหมาย: ${targetName} (<code>${targetUserId}</code>)\nสาเหตุ: ${reason}`, { parse_mode: 'HTML' });
-        bot.sendMessage(msg.chat.id, `✅ แบนและบันทึก Log สำเร็จ`, { parse_mode: 'HTML' });
+        bot.editMessageText(`✅ <b>สลายร่างเหยื่อสำเร็จ (Ban)</b>\nบันทึกประวัติลง Log เรียบร้อยแล้ว\n\n🛰️ <i>กำลังกลับสู่หน้าควบคุมหลัก...</i>`, { chat_id: chatId, message_id: messageId, parse_mode: 'HTML' }).catch(()=>{});
       } catch (e) {
-        bot.sendMessage(msg.chat.id, `⚠️ แบนไม่สำเร็จ (ขาดสิทธิ์แอดมิน?): <code>${e.message}</code>`, { parse_mode: 'HTML' });
+        bot.editMessageText(`⚠️ <b>แบนไม่สำเร็จ (บอทขาดสิทธิ์แอดมิน?):</b> <code>${e.message}</code>\n\n🛰️ <i>กำลังกลับสู่หน้าควบคุมหลัก...</i>`, { chat_id: chatId, message_id: messageId, parse_mode: 'HTML' }).catch(()=>{});
       }
+      setTimeout(() => { restoreSubmenu(chatId, messageId, groupId); }, 2500);
       break;
 
     // ==========================================
@@ -593,9 +648,15 @@ bot.on('message', async (msg) => {
       reason = spaceIdx === -1 ? 'ได้รับการอภัยโทษสูงสุดจากยานแม่เอเลี่ยน' : inputStr.substring(spaceIdx + 1).trim() || 'ได้รับการอภัยโทษสูงสุดจากยานแม่เอเลี่ยน';
 
       resolved = resolveTarget(targetInput);
-      if (resolved.error) { bot.sendMessage(msg.chat.id, resolved.error, { parse_mode: 'HTML' }); break; }
+      if (resolved.error) { 
+        bot.editMessageText(`${resolved.error}\n\n🛰️ <i>กำลังกลับสู่หน้าควบคุมหลัก...</i>`, { chat_id: chatId, message_id: messageId, parse_mode: 'HTML' }).catch(()=>{});
+        monitorSessions.delete(msg.from.id);
+        setTimeout(() => { restoreSubmenu(chatId, messageId, groupId); }, 3000);
+        break; 
+      }
       targetUserId = resolved.userId;
       targetName = resolved.name || await resolveName(targetUserId, targetGroupId);
+      monitorSessions.delete(msg.from.id);
 
       try {
         apiCounter += 2;
@@ -605,10 +666,11 @@ bot.on('message', async (msg) => {
         setTimeout(() => { bot.deleteMessage(targetGroupId, m.message_id).catch(() => {}); }, 60000);
 
         await bot.sendMessage(LOG_CHANNEL_ID, `📜 <b>[ UNBAN LOG ]</b>\nกลุ่ม: ${groupName}\nเป้าหมาย: ${targetName} (<code>${targetUserId}</code>)\nสาเหตุ: ${reason}`, { parse_mode: 'HTML' });
-        bot.sendMessage(msg.chat.id, `✅ ปลดแบนสำเร็จ`, { parse_mode: 'HTML' });
+        bot.editMessageText(`✅ <b>ชุบชีวิตเนื้อเยื่อสำเร็จ (Unban)</b>\nเป้าหมายสามารถกลับเข้ากลุ่มได้แล้ว\n\n🛰️ <i>กำลังกลับสู่หน้าควบคุมหลัก...</i>`, { chat_id: chatId, message_id: messageId, parse_mode: 'HTML' }).catch(()=>{});
       } catch (e) {
-        bot.sendMessage(msg.chat.id, `⚠️ ปลดแบนไม่สำเร็จ: <code>${e.message}</code>`, { parse_mode: 'HTML' });
+        bot.editMessageText(`⚠️ <b>ปลดแบนไม่สำเร็จ:</b> <code>${e.message}</code>\n\n🛰️ <i>กำลังกลับสู่หน้าควบคุมหลัก...</i>`, { chat_id: chatId, message_id: messageId, parse_mode: 'HTML' }).catch(()=>{});
       }
+      setTimeout(() => { restoreSubmenu(chatId, messageId, groupId); }, 2500);
       break;
 
     // ==========================================
@@ -616,18 +678,16 @@ bot.on('message', async (msg) => {
     // ==========================================
     case 'ann':
       apiCounter += 2;
+      monitorSessions.delete(msg.from.id);
       try {
         await bot.copyMessage(targetGroupId, msg.chat.id, msg.message_id);
-        bot.sendMessage(msg.chat.id, `📡 ส่งข้อความเข้ากลุ่มสำเร็จ`, { parse_mode: 'HTML' });
+        bot.editMessageText(`📡 <b>ฝังตัวรับส่งสัญญาณเข้ากลุ่มสำเร็จ!</b>\n\n🛰️ <i>กำลังกลับสู่หน้าควบคุมหลัก...</i>`, { chat_id: chatId, message_id: messageId, parse_mode: 'HTML' }).catch(()=>{});
       } catch (e) {
-        bot.sendMessage(msg.chat.id, `❌ ส่งไม่สำเร็จ: <code>${e.message}</code>`, { parse_mode: 'HTML' });
+        bot.editMessageText(`❌ <b>ส่งไม่สำเร็จ:</b> <code>${e.message}</code>\n\n🛰️ <i>กำลังกลับสู่หน้าควบคุมหลัก...</i>`, { chat_id: chatId, message_id: messageId, parse_mode: 'HTML' }).catch(()=>{});
       }
+      setTimeout(() => { restoreSubmenu(chatId, messageId, groupId); }, 2500);
       break;
   }
-
-  // เคลียร์ Session หลังจบการทำงาน และคืนหน้าเมนู
-  monitorSessions.delete(msg.from.id);
-  restoreSubmenu(chatId, messageId, groupId);
 });
 
 // เปิดพอร์ตเชื่อมกับเว็บเซิร์ฟเวอร์เพื่อให้ Render ไม่ปิดระบบบอท
