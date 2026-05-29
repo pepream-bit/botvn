@@ -175,7 +175,7 @@ function sendMainMenu(chatId, messageId = null) {
   ]);
   keyboard.push(
     [{ text: `📊 โควตาพลังงาน API`, callback_data: `view_api_limits` }, { text: `👥 รายชื่อ Whitelist`, callback_data: `view_whitelist` }],
-    [{ text: `⚙️ ศูนย์ตั้งค่า & ประกาศปิดบอท`, callback_data: `admin_settings` }]
+    [{ text: `⚙️ ศูนย์ตั้งค่า & ประกาศปิด/เปิดรับรูป`, callback_data: `admin_settings` }]
   );
 
   const text = "🛸 <b>แผงควบคุมหลัก: กองทัพเอเลี่ยนต่างดาว</b>\nโปรดเลือกคำสั่ง:";
@@ -220,7 +220,6 @@ bot.on('message', async (msg) => {
   // --- 2.1 รับภาพ ---
   if (userStates[userId] === 'waiting_for_photo') {
     if (msg.photo) {
-      // [อัปเดต] เคลียร์สถานะทันที ป้องกัน Member ส่งรัวๆ หรือส่งแบบ Album (รับแค่รูปแรก ประหยัด API)
       delete userStates[userId];
 
       const fileId = msg.photo[msg.photo.length - 1].file_id;
@@ -259,7 +258,6 @@ bot.on('message', async (msg) => {
       monitorSessions.delete(numUserId);
       sendMainMenu(msg.chat.id);
     } else {
-      // [อัปเดต] ถ้าปิดรับภาพ ให้เมินคนที่กด Start ไปเลย (ไม่ตอบกลับ)
       if (!appSettings.isAcceptingPhotos) return;
 
       bot.sendMessage(msg.chat.id, "สวัสดีครับ 🎭\nหากคุณต้องการแบ่งปันรูปภาพ สามารถกดปุ่มด้านล่างเพื่อส่งแบบไม่ระบุตัวตนให้แอดมินได้เลยครับ", {
@@ -409,7 +407,7 @@ bot.on('callback_query', async (query) => {
   // --- Member Functions ---
   if (data === 'send_anonymous') {
     if (!appSettings.isAcceptingPhotos) {
-      return bot.answerCallbackQuery(query.id, { text: "❌ ขณะนี้ศูนย์บังคับการปิดรับรูปภาพชั่วคราวครับ", show_alert: true });
+      return bot.answerCallbackQuery(query.id, { text: "❌ ขณะนี้ขออนุญาตปิดรับรูปภาพชั่วคราวนะครับ", show_alert: true });
     }
     userStates[userId] = 'waiting_for_photo';
     bot.sendMessage(chatId, "📸 <b>ส่งรูปภาพของคุณมาได้เลยครับ!</b>", { parse_mode: 'HTML' });
@@ -439,7 +437,6 @@ bot.on('callback_query', async (query) => {
           caption: "📩 <b>ภาพใหม่ถูกส่งเข้ามา!</b> (ไม่ระบุตัวตน)", parse_mode: 'HTML'
         });
         photoRecord.status = 'approved';
-        // [อัปเดต] โชว์ ID เมื่อกด Accept
         await bot.editMessageCaption(`✅ <b>อนุมัติแล้ว:</b> รูปจาก ID <code>${photoRecord.sender_id}</code> ถูกส่งเข้ากลุ่มสำเร็จ`, { chat_id: chatId, message_id: messageId, parse_mode: 'HTML' });
       } else {
         photoRecord.status = 'rejected';
@@ -454,19 +451,22 @@ bot.on('callback_query', async (query) => {
     return bot.answerCallbackQuery(query.id);
   }
 
-  // --- Admin: ตั้งค่า & ประกาศปิดบอท ---
+  // --- Admin: ตั้งค่า & ประกาศปิด/เปิดบอท ---
   if (data === 'admin_settings' || data === 'toggle_accept_photos') {
     if (data === 'toggle_accept_photos') appSettings.isAcceptingPhotos = !appSettings.isAcceptingPhotos;
     
     const statusText = appSettings.isAcceptingPhotos ? "✅ <b>เปิด</b>รับภาพนิรนาม" : "❌ <b>ปิด</b>รับภาพนิรนาม";
-    const toggleBtn = appSettings.isAcceptingPhotos ? "🔴 ปิดรับรูปภาพ" : "🟢 เปิดรับรูปภาพ";
+    const toggleBtn = appSettings.isAcceptingPhotos ? "🔴 ปิดการรับภาพ" : "🟢 เปิดการรับภาพ";
 
-    bot.editMessageText(`⚙️ <b>แผงตั้งค่า: ศูนย์รับภาพ & ระบบแจ้งเตือน</b>\n\nสถานะรับรูปปัจจุบัน: ${statusText}`, {
+    bot.editMessageText(`⚙️ <b>แผงตั้งค่า: ศูนย์รับภาพ & ระบบแจ้งเตือน</b>\n\nสถานะรับรูปปัจจุบัน: ${statusText}\n<i>(กดปุ่มด้านล่างเพื่อแจ้งสมาชิกในกลุ่ม)</i>`, {
       chat_id: chatId, message_id: messageId, parse_mode: 'HTML',
       reply_markup: {
         inline_keyboard: [
           [{ text: toggleBtn, callback_data: "toggle_accept_photos" }],
-          [{ text: "📢 ประกาศเตือนปิดบอท (ลงกลุ่ม)", callback_data: "warn_shutdown" }],
+          [
+            { text: "📢 ประกาศ: 🟢 เปิดรับรูป", callback_data: "warn_open" },
+            { text: "📢 ประกาศ: 🛑 ปิดรับรูป", callback_data: "warn_close" }
+          ],
           [{ text: '⬅️ กลับสู่แผงควบคุมหลัก', callback_data: 'back_to_main' }]
         ]
       }
@@ -474,13 +474,13 @@ bot.on('callback_query', async (query) => {
     return bot.answerCallbackQuery(query.id, data === 'toggle_accept_photos' ? { text: "บันทึกการตั้งค่าแล้ว!" } : undefined);
   }
 
-  // [อัปเดต] หน้าต่างยืนยันก่อนประกาศปิดบอท
-  if (data === 'warn_shutdown') {
-    bot.editMessageText(`⚠️ <b>ยืนยันการประกาศ</b>\nคุณต้องการส่งข้อความแจ้งเตือน "ปิดการใช้งานบอท" ลงในกลุ่มเป้าหมายใช่หรือไม่?\n\n<i>(เพื่อป้องกันการกดพลาด โปรดยืนยัน)</i>`, {
+  // --- แจ้งเตือนยืนยัน: เปิดรับรูป ---
+  if (data === 'warn_open') {
+    bot.editMessageText(`⚠️ <b>ยืนยันการประกาศ (เปิดรับรูป)</b>\nคุณต้องการส่งข้อความแจ้งเตือน "เปิดรับรูปภาพ" ลงในกลุ่มเป้าหมายใช่หรือไม่?\n\n<i>(เพื่อป้องกันการกดพลาด โปรดยืนยัน)</i>`, {
       chat_id: chatId, message_id: messageId, parse_mode: 'HTML',
       reply_markup: {
         inline_keyboard: [
-          [{ text: "✅ ยืนยันส่งประกาศ", callback_data: "confirm_shutdown" }],
+          [{ text: "✅ ยืนยันส่งประกาศเปิดรับรูป", callback_data: "confirm_open" }],
           [{ text: "❌ ยกเลิก", callback_data: "admin_settings" }]
         ]
       }
@@ -488,23 +488,67 @@ bot.on('callback_query', async (query) => {
     return bot.answerCallbackQuery(query.id);
   }
 
-  // [อัปเดต] ยิงข้อความประกาศลงกลุ่มแรก
-  if (data === 'confirm_shutdown') {
-    try {
-      await bot.sendMessage(TARGET_GROUPS[0].id, "📢 <b>ประกาศจากระบบ:</b>\nขณะนี้บอทกำลังจะปิดการใช้งานระบบชั่วคราว/ถาวร ขออภัยในความไม่สะดวกและขอบคุณสมาชิกทุกท่านครับ 🛸", { parse_mode: 'HTML' });
-      bot.answerCallbackQuery(query.id, { text: "✅ ส่งประกาศลงกลุ่มเรียบร้อยแล้ว", show_alert: true });
-    } catch (e) {
-      bot.answerCallbackQuery(query.id, { text: "❌ ส่งประกาศไม่สำเร็จ", show_alert: true });
-    }
-    // ดึงกลับไปหน้า Settings
-    const statusText = appSettings.isAcceptingPhotos ? "✅ <b>เปิด</b>" : "❌ <b>ปิด</b>";
-    const toggleBtn = appSettings.isAcceptingPhotos ? "🔴 ปิดรับรูปภาพ" : "🟢 เปิดรับรูปภาพ";
-    bot.editMessageText(`⚙️ <b>แผงตั้งค่า: ศูนย์รับภาพ & ระบบแจ้งเตือน</b>\n\nสถานะรับรูปปัจจุบัน: ${statusText}\n\n✅ <i>ส่งประกาศลงกลุ่มสำเร็จแล้ว</i>`, {
+  // --- แจ้งเตือนยืนยัน: ปิดรับรูป ---
+  if (data === 'warn_close') {
+    bot.editMessageText(`⚠️ <b>ยืนยันการประกาศ (ปิดรับรูป)</b>\nคุณต้องการส่งข้อความแจ้งเตือน "ปิดรับรูปภาพชั่วคราว" ลงในกลุ่มเป้าหมายใช่หรือไม่?\n\n<i>(เพื่อป้องกันการกดพลาด โปรดยืนยัน)</i>`, {
       chat_id: chatId, message_id: messageId, parse_mode: 'HTML',
       reply_markup: {
         inline_keyboard: [
-          [{ text: toggleBtn, callback_data: "toggle_accept_photos" }],
-          [{ text: "📢 ประกาศเตือนปิดบอท (ลงกลุ่ม)", callback_data: "warn_shutdown" }],
+          [{ text: "✅ ยืนยันส่งประกาศปิดรับรูป", callback_data: "confirm_close" }],
+          [{ text: "❌ ยกเลิก", callback_data: "admin_settings" }]
+        ]
+      }
+    }).catch(()=>{});
+    return bot.answerCallbackQuery(query.id);
+  }
+
+  // --- ประมวลผลยิงประกาศลงกลุ่ม: เปิดรับรูป ---
+  if (data === 'confirm_open') {
+    try {
+      await bot.sendMessage(TARGET_GROUPS[0].id, "📢 <b>ประกาศจากระบบ</b> 🟢\n\nเรียน สมาชิกทุกท่าน,\nขณะนี้ระบบ <b>เปิดรับรูปภาพตามปกติแล้ว</b> ครับ 🎉\n\nสมาชิกสามารถส่งรูปภาพแบบไม่ระบุตัวตนเข้ามาให้แอดมินพิจารณาได้เลยครับ ขอบคุณที่รอคอยนะครับ 🥰📸", { parse_mode: 'HTML' });
+      bot.answerCallbackQuery(query.id, { text: "✅ ส่งประกาศเปิดรับรูปลงกลุ่มเรียบร้อยแล้ว", show_alert: true });
+    } catch (e) {
+      bot.answerCallbackQuery(query.id, { text: "❌ ส่งประกาศไม่สำเร็จ", show_alert: true });
+    }
+    // เปลี่ยนสถานะหลังบ้านให้เป็น 'เปิด' อัตโนมัติด้วย
+    appSettings.isAcceptingPhotos = true;
+    
+    bot.editMessageText(`⚙️ <b>แผงตั้งค่า: ศูนย์รับภาพ & ระบบแจ้งเตือน</b>\n\nสถานะรับรูปปัจจุบัน: ✅ <b>เปิด</b>รับภาพนิรนาม\n\n✅ <i>ส่งประกาศ "เปิดรับรูป" ลงกลุ่มสำเร็จแล้ว</i>`, {
+      chat_id: chatId, message_id: messageId, parse_mode: 'HTML',
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "🔴 ปิดการรับภาพ", callback_data: "toggle_accept_photos" }],
+          [
+            { text: "📢 ประกาศ: 🟢 เปิดรับรูป", callback_data: "warn_open" },
+            { text: "📢 ประกาศ: 🛑 ปิดรับรูป", callback_data: "warn_close" }
+          ],
+          [{ text: '⬅️ กลับสู่แผงควบคุมหลัก', callback_data: 'back_to_main' }]
+        ]
+      }
+    }).catch(()=>{});
+    return;
+  }
+
+  // --- ประมวลผลยิงประกาศลงกลุ่ม: ปิดรับรูป ---
+  if (data === 'confirm_close') {
+    try {
+      await bot.sendMessage(TARGET_GROUPS[0].id, "📢 <b>ประกาศจากระบบ</b> 🛑\n\nเรียน สมาชิกทุกท่าน,\nขณะนี้ระบบ <b>ขออนุญาตปิดรับรูปภาพชั่วคราว</b> นะครับ 🙇‍♂️\n\nหากเปิดรับรูปภาพอีกครั้ง แอดมินจะแจ้งให้ทราบทันทีครับ ขอบคุณที่ให้ความร่วมมือครับ 🙏✨", { parse_mode: 'HTML' });
+      bot.answerCallbackQuery(query.id, { text: "✅ ส่งประกาศปิดรับรูปลงกลุ่มเรียบร้อยแล้ว", show_alert: true });
+    } catch (e) {
+      bot.answerCallbackQuery(query.id, { text: "❌ ส่งประกาศไม่สำเร็จ", show_alert: true });
+    }
+    // เปลี่ยนสถานะหลังบ้านให้เป็น 'ปิด' อัตโนมัติด้วย
+    appSettings.isAcceptingPhotos = false;
+
+    bot.editMessageText(`⚙️ <b>แผงตั้งค่า: ศูนย์รับภาพ & ระบบแจ้งเตือน</b>\n\nสถานะรับรูปปัจจุบัน: ❌ <b>ปิด</b>รับภาพนิรนาม\n\n✅ <i>ส่งประกาศ "ปิดรับรูป" ลงกลุ่มสำเร็จแล้ว</i>`, {
+      chat_id: chatId, message_id: messageId, parse_mode: 'HTML',
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "🟢 เปิดการรับภาพ", callback_data: "toggle_accept_photos" }],
+          [
+            { text: "📢 ประกาศ: 🟢 เปิดรับรูป", callback_data: "warn_open" },
+            { text: "📢 ประกาศ: 🛑 ปิดรับรูป", callback_data: "warn_close" }
+          ],
           [{ text: '⬅️ กลับสู่แผงควบคุมหลัก', callback_data: 'back_to_main' }]
         ]
       }
