@@ -9,13 +9,13 @@ const mongoUri = process.env.MONGODB_URI;
 
 // ตรวจสอบความพร้อมของระบบ
 if (!token || !LOG_CHANNEL_ID || !mongoUri) {
-  console.error('❌ CRITICAL ERROR: Interstellar Environment Variables missing!');
+  console.error('❌ CRITICAL ERROR: Environment Variables missing!');
   process.exit(1);
 }
 
 // 💽 เชื่อมต่อโครงข่ายฐานข้อมูลคลาวด์ถาวร
 mongoose.connect(mongoUri)
-  .then(() => console.log('💽 Nebula Database Connected! ความจำระยะยาวทำงานสมบูรณ์'))
+  .then(() => console.log('💽 Nebula Database: Initializing long-term memory...'))
   .catch(err => {
     console.error('❌ ฐานข้อมูลล้มเหลว:', err.message);
     process.exit(1);
@@ -61,11 +61,9 @@ async function loadDailyData() {
     if (data) {
       apiCounter = data.apiCounter || 0;
       warnData = data.warnData || {};
-      console.log(`📂 โหลดข้อมูลวันนี้ (${getTodayDate()}): API=${apiCounter}, Warns loaded`);
     } else {
       apiCounter = 0; warnData = {};
       await saveDailyData();
-      console.log(`🔄 รีเซตข้อมูลรายวัน (${getTodayDate()})`);
     }
   } catch (e) { console.error('❌ โหลดข้อมูลล้มเหลว:', e.message); }
 }
@@ -85,17 +83,15 @@ function scheduleMidnightReset() {
   midnight.setHours(24, 0, 0, 0);
   setTimeout(async () => {
     apiCounter = 0; warnData = {}; await saveDailyData();
-    console.log(`🔄 รีเซตรายวันอัตโนมัติ (${getTodayDate()})`);
     scheduleMidnightReset();
   }, midnight - now);
 }
 scheduleMidnightReset();
 
 // ==========================================
-// 🧹 [เพิ่มใหม่] ระบบ Auto-Cleanup ล้างฐานข้อมูล
+// 🧹 ระบบ Auto-Cleanup ล้างฐานข้อมูล
 // ==========================================
 function startAutoCleanup() {
-  // ทำงานทุกๆ 1 ชั่วโมง (3,600,000 มิลลิวินาที)
   setInterval(async () => {
     try {
       const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
@@ -106,24 +102,18 @@ function startAutoCleanup() {
         status: 'pending',
         timestamp: { $lt: twentyFourHoursAgo }
       });
-      if (pendingResult.deletedCount > 0) {
-        console.log(`🧹 Auto-Cleanup: ลบรูปค้างคิว (เกิน 24 ชม.) จำนวน ${pendingResult.deletedCount} รายการ`);
-      }
 
-      // 2. ลบประวัติรูปที่ 'approved/rejected' ไปแล้วเกิน 7 วัน (กัน DB บวม)
+      // 2. ลบประวัติรูปที่ 'approved/rejected' ไปแล้วเกิน 7 วัน
       const processedResult = await PendingPhoto.deleteMany({
         status: { $in: ['approved', 'rejected'] },
         processed_at: { $lt: sevenDaysAgo }
       });
-      if (processedResult.deletedCount > 0) {
-        console.log(`🧹 Auto-Cleanup: ลบประวัติเก่า (เกิน 7 วัน) จำนวน ${processedResult.deletedCount} รายการ`);
-      }
     } catch (e) {
       console.error('❌ Auto-Cleanup ขัดข้อง:', e.message);
     }
   }, 3600000);
 }
-startAutoCleanup(); // เริ่มระบบทันทีที่เปิดบอท
+startAutoCleanup();
 
 // ==========================================
 // 👥 การตรวจสอบสิทธิ์กลุ่ม
@@ -145,8 +135,23 @@ if (WHITELIST_IDS.length === 0 || TARGET_GROUPS.length === 0) {
   process.exit(1);
 }
 
+// ==========================================
+// 🚀 เริ่มต้นระบบบอท & แสดงหน้าจอ LOG สุดเท่ [Minimalist System Scan]
+// ==========================================
 const bot = new TelegramBot(token, { polling: true });
-console.log(`🛸 UFO Alien Invasion Engine Active! Overlords: ${WHITELIST_IDS.length} | Target Sectors: ${TARGET_GROUPS.length}`);
+
+console.log(`
+┌────────────────────────────────────────────────────────┐
+│   🛸  PLUMECE CORE v2.0 // SYSTEM INITIALIZED          │
+│   📡  OPERATIONAL STATUS: ONLINE [SUCCESS]             │
+│   🌌  SECTOR MONITORING: ACTIVE & SCANNING...          │
+├────────────────────────────────────────────────────────┤
+│   [💽 DB STATUS] : Nebula Connected & Loaded           │
+│   [👥 OPERATORS] : ${WHITELIST_IDS.length} Administrators Active       │
+│   [🛰️ TARGETS]   : ${TARGET_GROUPS.length} Sectors Locked & Ready     │
+│   [📅 TIME LINK] : ${getTodayDate()} @ ${new Date().toLocaleTimeString()}       │
+└────────────────────────────────────────────────────────┘
+`);
 
 // ==========================================
 // 🔧 ฟังก์ชัน Utilities
@@ -215,7 +220,7 @@ function sendMainMenu(chatId, messageId = null) {
     [{ text: `⚙️ ศูนย์ตั้งค่า & ประกาศปิด/เปิดรับรูป`, callback_data: `admin_settings` }]
   );
 
-  const text = "🛸 <b>แผงควบคุมหลัก: กองทัพเอเลี่ยนต่างดาว</b>\nโปรดเลือกคำสั่ง:";
+  const text = "🛸 <b>แผงควบคุมหลัก: PLUMECE SYSTEM</b>\nโปรดเลือกคำสั่ง:";
   const options = { parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard } };
 
   if (messageId) bot.editMessageText(text, { chat_id: chatId, message_id: messageId, ...options }).catch(()=>{});
@@ -264,7 +269,7 @@ bot.on('message', async (msg) => {
       const savedPhoto = await newPhoto.save();
       const photoDbId = savedPhoto._id.toString();
 
-      await bot.sendMessage(msg.chat.id, "✅ <b>ส่งรูปภาพสำเร็จ 1 รูป</b>\n<i>(หากส่งมาเป็นอัลบั้ม ระบบจะประมวลผลแค่รูปแรกสุดเท่านั้น)</i>\nระบบส่งให้แอดมินพิจารณาแล้วครับ", { parse_mode: 'HTML' });
+      await bot.sendMessage(msg.chat.id, "✅ <b>ส่งรูปภาพสำเร็จ 1 รูป</b>\nระบบส่งให้แอดมินพิจารณาแล้วครับ", { parse_mode: 'HTML' });
 
       for (const adminId of WHITELIST_IDS) {
         try {
@@ -315,7 +320,6 @@ bot.on('message', async (msg) => {
   const { chatId, messageId, groupId, action } = session;
   const targetGroupId = groupId; 
   const groupObj = TARGET_GROUPS.find(g => g.id == targetGroupId);
-  const groupName = groupObj ? groupObj.name : 'ไม่ระบุกลุ่ม';
   const inputStr = msg.text ? msg.text.trim() : '';
 
   if (action !== 'ann') bot.deleteMessage(msg.chat.id, msg.message_id).catch(() => {});
@@ -441,7 +445,6 @@ bot.on('callback_query', async (query) => {
   const messageId = query.message.message_id;
   const data = query.data;
 
-  // --- Member Functions ---
   if (data === 'send_anonymous') {
     if (!appSettings.isAcceptingPhotos) {
       return bot.answerCallbackQuery(query.id, { text: "❌ ขณะนี้ขออนุญาตปิดรับรูปภาพชั่วคราวนะครับ", show_alert: true });
@@ -456,7 +459,6 @@ bot.on('callback_query', async (query) => {
     return bot.answerCallbackQuery(query.id, { text: '🚨 ปฏิเสธการเข้าถึง!', show_alert: true });
   }
 
-  // --- Admin: จัดการรูป ---
   if (data.startsWith('approve_') || data.startsWith('reject_')) {
     const action = data.split('_')[0];
     const photoId = data.split('_')[1];
@@ -488,14 +490,13 @@ bot.on('callback_query', async (query) => {
     return bot.answerCallbackQuery(query.id);
   }
 
-  // --- Admin: ตั้งค่า & ประกาศปิด/เปิดบอท ---
   if (data === 'admin_settings' || data === 'toggle_accept_photos') {
     if (data === 'toggle_accept_photos') appSettings.isAcceptingPhotos = !appSettings.isAcceptingPhotos;
     
     const statusText = appSettings.isAcceptingPhotos ? "✅ <b>เปิด</b>รับภาพนิรนาม" : "❌ <b>ปิด</b>รับภาพนิรนาม";
     const toggleBtn = appSettings.isAcceptingPhotos ? "🔴 ปิดการรับภาพ" : "🟢 เปิดการรับภาพ";
 
-    bot.editMessageText(`⚙️ <b>แผงตั้งค่า: ศูนย์รับภาพ & ระบบแจ้งเตือน</b>\n\nสถานะรับรูปปัจจุบัน: ${statusText}\n<i>(กดปุ่มด้านล่างเพื่อแจ้งสมาชิกในกลุ่ม)</i>`, {
+    bot.editMessageText(`⚙️ <b>แผงตั้งค่า: ศูนย์รับภาพ & ระบบแจ้งเตือน</b>\n\nสถานะรับรูปปัจจุบัน: ${statusText}`, {
       chat_id: chatId, message_id: messageId, parse_mode: 'HTML',
       reply_markup: {
         inline_keyboard: [
@@ -512,7 +513,7 @@ bot.on('callback_query', async (query) => {
   }
 
   if (data === 'warn_open') {
-    bot.editMessageText(`⚠️ <b>ยืนยันการประกาศ (เปิดรับรูป)</b>\nคุณต้องการส่งข้อความแจ้งเตือน "เปิดรับรูปภาพ" ลงในกลุ่มเป้าหมายใช่หรือไม่?\n\n<i>(เพื่อป้องกันการกดพลาด โปรดยืนยัน)</i>`, {
+    bot.editMessageText(`⚠️ <b>ยืนยันการประกาศ (เปิดรับรูป)</b>`, {
       chat_id: chatId, message_id: messageId, parse_mode: 'HTML',
       reply_markup: {
         inline_keyboard: [
@@ -525,7 +526,7 @@ bot.on('callback_query', async (query) => {
   }
 
   if (data === 'warn_close') {
-    bot.editMessageText(`⚠️ <b>ยืนยันการประกาศ (ปิดรับรูป)</b>\nคุณต้องการส่งข้อความแจ้งเตือน "ปิดรับรูปภาพชั่วคราว" ลงในกลุ่มเป้าหมายใช่หรือไม่?\n\n<i>(เพื่อป้องกันการกดพลาด โปรดยืนยัน)</i>`, {
+    bot.editMessageText(`⚠️ <b>ยืนยันการประกาศ (ปิดรับรูป)</b>`, {
       chat_id: chatId, message_id: messageId, parse_mode: 'HTML',
       reply_markup: {
         inline_keyboard: [
@@ -539,55 +540,24 @@ bot.on('callback_query', async (query) => {
 
   if (data === 'confirm_open') {
     try {
-      await bot.sendMessage(TARGET_GROUPS[0].id, "📢 <b>ประกาศจากระบบ</b> 🟢\n\nเรียน สมาชิกทุกท่าน,\nขณะนี้ระบบ <b>เปิดรับรูปภาพตามปกติแล้ว</b> ครับ 🎉\n\nสมาชิกสามารถส่งรูปภาพแบบไม่ระบุตัวตนเข้ามาให้แอดมินพิจารณาได้เลยครับ ขอบคุณที่รอคอยนะครับ 🥰📸", { parse_mode: 'HTML' });
+      await bot.sendMessage(TARGET_GROUPS[0].id, "📢 <b>ประกาศจากระบบ</b> 🟢\n\nเรียน สมาชิกทุกท่าน,\nขณะนี้ระบบ <b>เปิดรับรูปภาพตามปกติแล้ว</b> ครับ 🎉", { parse_mode: 'HTML' });
       bot.answerCallbackQuery(query.id, { text: "✅ ส่งประกาศเปิดรับรูปลงกลุ่มเรียบร้อยแล้ว", show_alert: true });
-    } catch (e) {
-      bot.answerCallbackQuery(query.id, { text: "❌ ส่งประกาศไม่สำเร็จ", show_alert: true });
-    }
+    } catch (e) { bot.answerCallbackQuery(query.id, { text: "❌ ส่งประกาศไม่สำเร็จ", show_alert: true }); }
     appSettings.isAcceptingPhotos = true;
-    
-    bot.editMessageText(`⚙️ <b>แผงตั้งค่า: ศูนย์รับภาพ & ระบบแจ้งเตือน</b>\n\nสถานะรับรูปปัจจุบัน: ✅ <b>เปิด</b>รับภาพนิรนาม\n\n✅ <i>ส่งประกาศ "เปิดรับรูป" ลงกลุ่มสำเร็จแล้ว</i>`, {
-      chat_id: chatId, message_id: messageId, parse_mode: 'HTML',
-      reply_markup: {
-        inline_keyboard: [
-          [{ text: "🔴 ปิดการรับภาพ", callback_data: "toggle_accept_photos" }],
-          [
-            { text: "📢 ประกาศ: 🟢 เปิดรับรูป", callback_data: "warn_open" },
-            { text: "📢 ประกาศ: 🛑 ปิดรับรูป", callback_data: "warn_close" }
-          ],
-          [{ text: '⬅️ กลับสู่แผงควบคุมหลัก', callback_data: 'back_to_main' }]
-        ]
-      }
-    }).catch(()=>{});
+    restoreSubmenu(chatId, messageId, TARGET_GROUPS[0].id);
     return;
   }
 
   if (data === 'confirm_close') {
     try {
-      await bot.sendMessage(TARGET_GROUPS[0].id, "📢 <b>ประกาศจากระบบ</b> 🛑\n\nเรียน สมาชิกทุกท่าน,\nขณะนี้ระบบ <b>ขออนุญาตปิดรับรูปภาพชั่วคราว</b> นะครับ 🙇‍♂️\n\nหากเปิดรับรูปภาพอีกครั้ง แอดมินจะแจ้งให้ทราบทันทีครับ ขอบคุณที่ให้ความร่วมมือครับ 🙏✨", { parse_mode: 'HTML' });
+      await bot.sendMessage(TARGET_GROUPS[0].id, "📢 <b>ประกาศจากระบบ</b> 🛑\n\nเรียน สมาชิกทุกท่าน,\nขณะนี้ระบบ <b>ขออนุญาตปิดรับรูปภาพชั่วคราว</b> นะครับ 🙇‍♂️", { parse_mode: 'HTML' });
       bot.answerCallbackQuery(query.id, { text: "✅ ส่งประกาศปิดรับรูปลงกลุ่มเรียบร้อยแล้ว", show_alert: true });
-    } catch (e) {
-      bot.answerCallbackQuery(query.id, { text: "❌ ส่งประกาศไม่สำเร็จ", show_alert: true });
-    }
+    } catch (e) { bot.answerCallbackQuery(query.id, { text: "❌ ส่งประกาศไม่สำเร็จ", show_alert: true }); }
     appSettings.isAcceptingPhotos = false;
-
-    bot.editMessageText(`⚙️ <b>แผงตั้งค่า: ศูนย์รับภาพ & ระบบแจ้งเตือน</b>\n\nสถานะรับรูปปัจจุบัน: ❌ <b>ปิด</b>รับภาพนิรนาม\n\n✅ <i>ส่งประกาศ "ปิดรับรูป" ลงกลุ่มสำเร็จแล้ว</i>`, {
-      chat_id: chatId, message_id: messageId, parse_mode: 'HTML',
-      reply_markup: {
-        inline_keyboard: [
-          [{ text: "🟢 เปิดการรับภาพ", callback_data: "toggle_accept_photos" }],
-          [
-            { text: "📢 ประกาศ: 🟢 เปิดรับรูป", callback_data: "warn_open" },
-            { text: "📢 ประกาศ: 🛑 ปิดรับรูป", callback_data: "warn_close" }
-          ],
-          [{ text: '⬅️ กลับสู่แผงควบคุมหลัก', callback_data: 'back_to_main' }]
-        ]
-      }
-    }).catch(()=>{});
+    restoreSubmenu(chatId, messageId, TARGET_GROUPS[0].id);
     return;
   }
 
-  // --- Admin: เมนูย่อย ---
   if (data.startsWith('cancel_')) {
     const groupId = data.replace('cancel_', '');
     monitorSessions.delete(numUserId);
@@ -604,7 +574,7 @@ bot.on('callback_query', async (query) => {
     const pct = Math.min(100, Math.round((apiCounter / API_DAILY_MAX) * 100));
     const bars = Math.round(pct / 10);
     const barStr = "🟩".repeat(bars) + "⬜".repeat(10 - bars);
-    bot.editMessageText(`📊 <b>เครื่องตรวจวัดพลังงานสัญญาณ</b>\nหลอด: [<code>${barStr}</code>] ${pct}%\nใช้ไป: <code>${apiCounter}</code> / <code>${API_DAILY_MAX}</code> ครั้ง`, {
+    bot.editMessageText(`📊 <b>เครื่องตรวจวัดพลังงานสัญญาณ</b>\nหลอด: [<code>${barStr}</code>] ${pct}%\nใช้ไป: <code>${apiCounter}</code> / <code>${API_DAILY_MAX}</code>`, {
       chat_id: chatId, message_id: messageId, parse_mode: 'HTML',
       reply_markup: { inline_keyboard: [[{ text: '⬅️ กลับ', callback_data: 'back_to_main' }]] }
     }).catch(()=>{});
