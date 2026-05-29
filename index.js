@@ -1,10 +1,3 @@
-จัดให้ครับ! ผมได้เพิ่มระบบ **Auto-Cleanup (ล้างข้อมูลอัตโนมัติ)** เข้าไปในโค้ดฉบับสมบูรณ์ให้เรียบร้อยแล้วครับ
-
-ระบบนี้จะตื่นขึ้นมาเช็คทุกๆ 1 ชั่วโมง เพื่อลบรูปที่ค้างอยู่ในสถานะ `pending` เกิน 24 ชั่วโมงทิ้ง (และผมแถมการลบประวัติรูปที่ถูกกด `approved/rejected` ไปแล้วเกิน 7 วันให้ด้วย เพื่อให้ฐานข้อมูลของคุณสะอาดและทำงานได้เร็วที่สุดเสมอครับ)
-
-คุณสามารถก๊อปปี้โค้ดด้านล่างนี้ไป **วางทับไฟล์ `index.js` เดิมได้เลยทั้งหมดครับ**:
-
-```javascript
 const TelegramBot = require('node-telegram-bot-api');
 const http = require('http');
 const mongoose = require('mongoose');
@@ -665,5 +658,3 @@ bot.on('callback_query', async (query) => {
 });
 
 http.createServer((req, res) => res.end('SYSTEM_ONLINE')).listen(process.env.PORT || 3000);
-
-```
