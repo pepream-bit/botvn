@@ -29,11 +29,11 @@ const SystemDataSchema = new mongoose.Schema({
 }, { minimize: false }); 
 const SystemData = mongoose.model('SystemData', SystemDataSchema);
 
-// 📂 [เพิ่มใหม่] โครงสร้างฐานข้อมูลสำหรับเก็บรูปภาพรออนุมัติ
+// 📂 โครงสร้างฐานข้อมูลสำหรับเก็บรูปภาพรออนุมัติ
 const PendingPhotoSchema = new mongoose.Schema({
   file_id: String,
   sender_id: String,
-  status: { type: String, default: 'pending' }, // pending, approved, rejected
+  status: { type: String, default: 'pending' }, 
   timestamp: { type: Date, default: Date.now },
   processed_by: String,
   processed_at: Date
@@ -42,8 +42,8 @@ const PendingPhoto = mongoose.model('PendingPhoto', PendingPhotoSchema);
 
 // 🌌 ระบบฐานข้อมูลชั่วคราวและ State
 const usernameCache = {};
-const userStates = {}; // ติดตามว่าใครกำลังส่งรูป
-const appSettings = { isAcceptingPhotos: true }; // เปิด-ปิด รับรูปจาก Member
+const userStates = {}; 
+const appSettings = { isAcceptingPhotos: true }; 
 
 // ☢️ ระบบคำเตือนรังสี & โควตา API
 let warnData = {};
@@ -51,14 +51,10 @@ const WARN_LIMIT = 2;
 let apiCounter = 0;
 const API_DAILY_MAX = 50000;
 
-// 🗂️ Session Storage สำหรับติดตามสถานะของ Operator
 const monitorSessions = new Map();
 
-function getTodayDate() {
-  return new Date().toISOString().slice(0, 10); 
-}
+function getTodayDate() { return new Date().toISOString().slice(0, 10); }
 
-// 📂 ฟังก์ชันโหลดและบันทึกข้อมูลถาวร
 async function loadDailyData() {
   try {
     let data = await SystemData.findOne({ date: getTodayDate() });
@@ -67,45 +63,34 @@ async function loadDailyData() {
       warnData = data.warnData || {};
       console.log(`📂 โหลดข้อมูลวันนี้ (${getTodayDate()}): API=${apiCounter}, Warns loaded`);
     } else {
-      apiCounter = 0;
-      warnData = {};
+      apiCounter = 0; warnData = {};
       await saveDailyData();
       console.log(`🔄 รีเซตข้อมูลรายวัน (${getTodayDate()})`);
     }
-  } catch (e) {
-    console.error('❌ โหลดข้อมูลล้มเหลว:', e.message);
-  }
+  } catch (e) { console.error('❌ โหลดข้อมูลล้มเหลว:', e.message); }
 }
 
 async function saveDailyData() {
   try {
     await SystemData.findOneAndUpdate(
-      { date: getTodayDate() },
-      { apiCounter, warnData },
-      { upsert: true, new: true }
+      { date: getTodayDate() }, { apiCounter, warnData }, { upsert: true, new: true }
     );
-  } catch (e) {
-    console.error('❌ บันทึกข้อมูลไม่สำเร็จ:', e.message);
-  }
+  } catch (e) { console.error('❌ บันทึกข้อมูลไม่สำเร็จ:', e.message); }
 }
 loadDailyData();
 
-// ตั้ง Timer รีเซตอัตโนมัติทุกเที่ยงคืน
 function scheduleMidnightReset() {
   const now = new Date();
   const midnight = new Date(now);
   midnight.setHours(24, 0, 0, 0);
   setTimeout(async () => {
-    apiCounter = 0;
-    warnData = {};
-    await saveDailyData();
+    apiCounter = 0; warnData = {}; await saveDailyData();
     console.log(`🔄 รีเซตรายวันอัตโนมัติ (${getTodayDate()})`);
     scheduleMidnightReset();
   }, midnight - now);
 }
 scheduleMidnightReset();
 
-// 👥 ระบบ Whitelist และ Target Groups
 const WHITELIST_IDS = process.env.WHITELIST_IDS 
   ? process.env.WHITELIST_IDS.split(',').map(id => parseInt(id.trim())) 
   : [];
@@ -114,9 +99,7 @@ const TARGET_GROUPS = [];
 if (process.env.TARGET_GROUPS) {
   process.env.TARGET_GROUPS.split(',').forEach(item => {
     const parts = item.split(':');
-    if (parts.length >= 2) {
-      TARGET_GROUPS.push({ id: parts[0].trim(), name: parts.slice(1).join(':').trim() });
-    }
+    if (parts.length >= 2) TARGET_GROUPS.push({ id: parts[0].trim(), name: parts.slice(1).join(':').trim() });
   });
 }
 
@@ -129,7 +112,7 @@ const bot = new TelegramBot(token, { polling: true });
 console.log(`🛸 UFO Alien Invasion Engine Active! Overlords: ${WHITELIST_IDS.length} | Target Sectors: ${TARGET_GROUPS.length}`);
 
 // ==========================================
-// 🔧 ฟังก์ชันช่วยระบบ Warn & Utilities
+// 🔧 ฟังก์ชัน Utilities
 // ==========================================
 function getWarnCount(groupId, userId) {
   if (!warnData[groupId]) warnData[groupId] = {};
@@ -158,10 +141,10 @@ function resolveTarget(input) {
   if (trimmed.startsWith('@')) {
     const key = trimmed.replace('@', '').toLowerCase();
     if (usernameCache[key]) return { userId: usernameCache[key].id, name: usernameCache[key].name };
-    return { error: `❌ ไม่พบ ID ของ <code>${trimmed}</code> ในระบบ\n💡 ให้เป้าหมายส่งข้อความในกลุ่มก่อน หรือใส่ตัวเลข ID แทน` };
+    return { error: `❌ ไม่พบ ID ของ <code>${trimmed}</code>` };
   }
   const userId = parseInt(trimmed);
-  if (isNaN(userId)) return { error: '❌ รูปแบบไม่ถูกต้อง ใช้ <code>@username</code> หรือ <code>ตัวเลข ID</code>' };
+  if (isNaN(userId)) return { error: '❌ รูปแบบไม่ถูกต้อง' };
   let name = null;
   for (const key in usernameCache) {
     if (usernameCache[key].id === userId) { name = usernameCache[key].name; break; }
@@ -174,8 +157,7 @@ async function resolveName(userId, groupId) {
     if (usernameCache[key].id === userId) return usernameCache[key].name;
   }
   try {
-    apiCounter++;
-    await saveDailyData();
+    apiCounter++; await saveDailyData();
     const member = await bot.getChatMember(groupId, userId);
     const name = `${member.user.first_name || ''} ${member.user.last_name || ''}`.trim() || member.user.username || `ID:${userId}`;
     usernameCache[`id_${userId}`] = { id: userId, name };
@@ -184,31 +166,23 @@ async function resolveName(userId, groupId) {
 }
 
 // ==========================================
-// 1. เมนูหลัก Command Center (ระบบจอทีวี - Admin Only)
+// 1. เมนูหลัก Command Center
 // ==========================================
 function sendMainMenu(chatId, messageId = null) {
-  apiCounter++;
-  saveDailyData();
+  apiCounter++; saveDailyData();
   const keyboard = TARGET_GROUPS.map(g => [
     { text: `🛰️ เซกเตอร์: ${g.name}`, callback_data: `select_group_${g.id}` }
   ]);
-  keyboard.push([
-    { text: `📊 โควตาพลังงาน API`, callback_data: `view_api_limits` },
-    { text: `👥 รายชื่อ Whitelist`, callback_data: `view_whitelist` }
-  ]);
-  // [เพิ่มใหม่] ปุ่มเมนูตั้งค่าการรับรูปสำหรับแอดมิน
-  keyboard.push([
-    { text: `📸 ศูนย์ตั้งค่าภาพนิรนาม`, callback_data: `admin_settings` }
-  ]);
+  keyboard.push(
+    [{ text: `📊 โควตาพลังงาน API`, callback_data: `view_api_limits` }, { text: `👥 รายชื่อ Whitelist`, callback_data: `view_whitelist` }],
+    [{ text: `⚙️ ศูนย์ตั้งค่า & ประกาศปิดบอท`, callback_data: `admin_settings` }]
+  );
 
-  const text = "🛸 <b>แผงควบคุมหลัก: กองทัพเอเลี่ยนต่างดาว (Alien Attack Machine)</b>\nยินดีต้อนรับท่านผู้บัญชาการ โปรดเลือกเซกเตอร์ดาวเทียมที่ต้องการเข้าควบคุม:";
+  const text = "🛸 <b>แผงควบคุมหลัก: กองทัพเอเลี่ยนต่างดาว</b>\nโปรดเลือกคำสั่ง:";
   const options = { parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard } };
 
-  if (messageId) {
-    bot.editMessageText(text, { chat_id: chatId, message_id: messageId, ...options }).catch(()=>{});
-  } else {
-    bot.sendMessage(chatId, text, options);
-  }
+  if (messageId) bot.editMessageText(text, { chat_id: chatId, message_id: messageId, ...options }).catch(()=>{});
+  else bot.sendMessage(chatId, text, options);
 }
 
 function restoreSubmenu(chatId, messageId, groupId) {
@@ -222,47 +196,44 @@ function restoreSubmenu(chatId, messageId, groupId) {
     [{ text: '💬 ตอบกลับด้วยลิงก์ (Reply Link)', callback_data: `opt_replylink_${groupId}` }],
     [{ text: '⬅️ กลับสู่แผงควบคุมหลัก', callback_data: 'back_to_main' }]
   ];
-  bot.editMessageText(`🛰️ <b>พิกัดเซกเตอร์ที่ล็อกไว้:</b> <code>${group.name}</code>\nโปรดเลือกคำสั่งโปรโตคอลการโจมตี:`, {
+  bot.editMessageText(`🛰️ <b>พิกัดเซกเตอร์:</b> <code>${group.name}</code>\nโปรดเลือกคำสั่ง:`, {
     chat_id: chatId, message_id: messageId, parse_mode: 'HTML', reply_markup: { inline_keyboard: submenu }
   }).catch(()=>{});
 }
 
 // ==========================================
-// 2. จัดการข้อความและโปรเซสเซสชัน (ผสาน Member + Admin)
+// 2. จัดการข้อความ
 // ==========================================
 bot.on('message', async (msg) => {
-  // บันทึกโปรไฟล์ Cache
   if (msg.from) {
     const fullName = `${msg.from.first_name || ''} ${msg.from.last_name || ''}`.trim() || msg.from.username || `ID:${msg.from.id}`;
     usernameCache[`id_${msg.from.id}`] = { id: msg.from.id, name: fullName };
     if (msg.from.username) usernameCache[msg.from.username.toLowerCase()] = { id: msg.from.id, name: fullName };
   }
 
-  // 🛡️ ทำงานเฉพาะในแชทส่วนตัวเท่านั้น
   if (msg.chat.type !== 'private') return; 
 
   const numUserId = msg.from.id;
   const userId = numUserId.toString();
   const isAdmin = WHITELIST_IDS.includes(numUserId);
 
-  // --- 2.1 ตรวจสอบสถานะรอรับรูปจากผู้ใช้ (Member/Admin) ---
+  // --- 2.1 รับภาพ ---
   if (userStates[userId] === 'waiting_for_photo') {
     if (msg.photo) {
+      // [อัปเดต] เคลียร์สถานะทันที ป้องกัน Member ส่งรัวๆ หรือส่งแบบ Album (รับแค่รูปแรก ประหยัด API)
+      delete userStates[userId];
+
       const fileId = msg.photo[msg.photo.length - 1].file_id;
-      
-      // บันทึกลง MongoDB
       const newPhoto = new PendingPhoto({ file_id: fileId, sender_id: userId });
       const savedPhoto = await newPhoto.save();
       const photoDbId = savedPhoto._id.toString();
 
-      await bot.sendMessage(msg.chat.id, "✅ <b>ส่งรูปภาพเรียบร้อยแล้ว</b> ระบบส่งให้แอดมินพิจารณาแล้วครับ\n<i>(พิมพ์ /start เพื่อเรียกเมนูใหม่)</i>", { parse_mode: 'HTML' });
-      delete userStates[userId]; // เคลียร์สถานะ
+      await bot.sendMessage(msg.chat.id, "✅ <b>ส่งรูปภาพสำเร็จ 1 รูป</b>\n<i>(หากส่งมาเป็นอัลบั้ม ระบบจะประมวลผลแค่รูปแรกสุดเท่านั้น)</i>\nระบบส่งให้แอดมินพิจารณาแล้วครับ", { parse_mode: 'HTML' });
 
-      // แจ้งเตือนแอดมินทุกคน
       for (const adminId of WHITELIST_IDS) {
         try {
           await bot.sendPhoto(adminId, fileId, {
-            caption: `🚨 <b>[สัญญาณแทรกซึม] มีรูปใหม่เข้าคิว!</b>\n\n👤 จากต้นทาง ID: <code>${userId}</code>`,
+            caption: `🚨 <b>มีรูปใหม่เข้าคิว!</b>\n\n👤 จาก ID: <code>${userId}</code>`,
             parse_mode: 'HTML',
             reply_markup: {
               inline_keyboard: [
@@ -275,20 +246,22 @@ bot.on('message', async (msg) => {
       }
       return;
     } else if (msg.text && msg.text.startsWith('/start')) {
-      delete userStates[userId]; // ยกเลิกการส่งรูปถ้ากด Start ใหม่
+      delete userStates[userId];
     } else {
-      await bot.sendMessage(msg.chat.id, "❌ กรุณาส่งเป็นไฟล์รูปภาพเท่านั้นครับ หากต้องการยกเลิกให้พิมพ์ /start");
+      await bot.sendMessage(msg.chat.id, "❌ กรุณาส่งเป็นไฟล์รูปภาพเท่านั้นครับ");
       return;
     }
   }
 
-  // --- 2.2 จัดการคำสั่ง /start (แยกระหว่าง Admin กับ Member) ---
+  // --- 2.2 จัดการ /start ---
   if (msg.text && msg.text.startsWith('/start')) {
     if (isAdmin) {
       monitorSessions.delete(numUserId);
       sendMainMenu(msg.chat.id);
     } else {
-      // เมนูของ Member (มีปุ่มเดียว)
+      // [อัปเดต] ถ้าปิดรับภาพ ให้เมินคนที่กด Start ไปเลย (ไม่ตอบกลับ)
+      if (!appSettings.isAcceptingPhotos) return;
+
       bot.sendMessage(msg.chat.id, "สวัสดีครับ 🎭\nหากคุณต้องการแบ่งปันรูปภาพ สามารถกดปุ่มด้านล่างเพื่อส่งแบบไม่ระบุตัวตนให้แอดมินได้เลยครับ", {
         reply_markup: {
           inline_keyboard: [[{ text: "📸 ส่งรูปแบบไม่ระบุตัวตน", callback_data: "send_anonymous" }]]
@@ -298,7 +271,6 @@ bot.on('message', async (msg) => {
     return;
   }
 
-  // --- 2.3 ระบบ Command Center ของ Admin (รอรับข้อความ) ---
   if (!isAdmin) return; 
 
   const session = monitorSessions.get(numUserId);
@@ -318,17 +290,16 @@ bot.on('message', async (msg) => {
   switch (action) {
     case 'capture_url':
       apiCounter++; await saveDailyData();
-      bot.editMessageText(`⏳ <b>[QUANTUM TRACTOR BEAM]</b>\nกำลังเดินเครื่อง... โปรดรอสักครู่`, { chat_id: chatId, messageId: messageId, parse_mode: 'HTML' }).catch(()=>{});
+      bot.editMessageText(`⏳ กำลังเดินเครื่อง...`, { chat_id: chatId, messageId: messageId }).catch(()=>{});
       monitorSessions.delete(numUserId);
       try {
         let tChatId, mId;
         const parts = inputStr.split('/');
         mId = parseInt(parts.pop());
         tChatId = inputStr.includes('/c/') ? "-100" + parts.pop() : "@" + parts.pop();
-        if (!tChatId || isNaN(mId)) throw new Error("พิกัดคลื่นไม่ถูกต้อง");
         apiCounter += 2; await saveDailyData();
         await bot.copyMessage(numUserId, tChatId, mId);
-        bot.editMessageText(`🛸 <b>ดึงสื่อสำเร็จ</b>\nระบบส่งเข้าแชทส่วนตัวแล้ว`, { chat_id: chatId, message_id: messageId, parse_mode: 'HTML' }).catch(()=>{});
+        bot.editMessageText(`🛸 <b>ดึงสื่อสำเร็จ</b>`, { chat_id: chatId, message_id: messageId, parse_mode: 'HTML' }).catch(()=>{});
       } catch (e) {
         bot.editMessageText(`❌ <b>ดึงสื่อไม่สำเร็จ:</b> <code>${e.message}</code>`, { chat_id: chatId, message_id: messageId, parse_mode: 'HTML' }).catch(()=>{});
       }
@@ -343,7 +314,7 @@ bot.on('message', async (msg) => {
       apiCounter++; await saveDailyData();
       spaceIdx = inputStr.indexOf(' ');
       targetInput = spaceIdx === -1 ? inputStr : inputStr.substring(0, spaceIdx);
-      reason = spaceIdx === -1 ? 'ละเมิดกฎกองทัพเอเลี่ยน' : inputStr.substring(spaceIdx + 1).trim();
+      reason = spaceIdx === -1 ? 'ละเมิดกฎ' : inputStr.substring(spaceIdx + 1).trim();
 
       resolved = resolveTarget(targetInput);
       if (resolved.error) { 
@@ -360,17 +331,15 @@ bot.on('message', async (msg) => {
         try {
           await bot.banChatMember(targetGroupId, targetUserId);
           clearWarn(targetGroupId, targetUserId); await saveDailyData();
-          bot.sendMessage(targetGroupId, `🔴 <b>[ BAN VAPORIZED ]</b>\n👤 <b>เป้าหมาย:</b> ${targetName}\n🚨 สาเหตุ: <code>${reason}</code>`, { parse_mode: 'HTML' }).then(m => setTimeout(()=>bot.deleteMessage(targetGroupId, m.message_id).catch(()=>{}), 60000));
-          bot.sendMessage(LOG_CHANNEL_ID, `📜 <b>[ BAN LOG ]</b>\nกลุ่ม: ${groupName}\nเป้า: ${targetName}\nเหตุ: ${reason}`);
+          bot.sendMessage(targetGroupId, `🔴 <b>[ BAN ]</b>\n👤 <b>เป้าหมาย:</b> ${targetName}\n🚨 สาเหตุ: <code>${reason}</code>`, { parse_mode: 'HTML' }).then(m => setTimeout(()=>bot.deleteMessage(targetGroupId, m.message_id).catch(()=>{}), 60000));
           bot.editMessageText(`✅ <b>สลายร่างเหยื่อสำเร็จ (Ban)</b>`, { chat_id: chatId, message_id: messageId, parse_mode: 'HTML' }).catch(()=>{});
         } catch (e) { bot.editMessageText(`⚠️ <b>แบนไม่สำเร็จ:</b> ${e.message}`, { chat_id: chatId, message_id: messageId }).catch(()=>{}); }
       } 
       else if (action === 'unban') {
         try {
           await bot.unbanChatMember(targetGroupId, targetUserId, { only_if_banned: true });
-          bot.sendMessage(targetGroupId, `🟢 <b>[ UNBAN REANIMATED ]</b>\n👤 <b>เป้าหมาย:</b> ${targetName}\n🔓 ได้รับอนุญาตให้กลับเข้ากลุ่ม`, { parse_mode: 'HTML' }).then(m => setTimeout(()=>bot.deleteMessage(targetGroupId, m.message_id).catch(()=>{}), 60000));
-          bot.sendMessage(LOG_CHANNEL_ID, `📜 <b>[ UNBAN LOG ]</b>\nกลุ่ม: ${groupName}\nเป้า: ${targetName}`);
-          bot.editMessageText(`✅ <b>ชุบชีวิตเนื้อเยื่อสำเร็จ (Unban)</b>`, { chat_id: chatId, message_id: messageId, parse_mode: 'HTML' }).catch(()=>{});
+          bot.sendMessage(targetGroupId, `🟢 <b>[ UNBAN ]</b>\n👤 <b>เป้าหมาย:</b> ${targetName}\n🔓 กลับเข้ากลุ่มได้`, { parse_mode: 'HTML' }).then(m => setTimeout(()=>bot.deleteMessage(targetGroupId, m.message_id).catch(()=>{}), 60000));
+          bot.editMessageText(`✅ <b>ชุบชีวิตสำเร็จ (Unban)</b>`, { chat_id: chatId, message_id: messageId, parse_mode: 'HTML' }).catch(()=>{});
         } catch (e) { bot.editMessageText(`⚠️ <b>ปลดแบนไม่สำเร็จ:</b> ${e.message}`, { chat_id: chatId, message_id: messageId }).catch(()=>{}); }
       }
       else if (action === 'warn') {
@@ -382,19 +351,19 @@ bot.on('message', async (msg) => {
           bot.sendMessage(targetGroupId, `☢️ <b>[ AUTO BAN ]</b>\n👤 ${targetName}\n☢️ รังสี: [${warnBar}]\n💥 สาเหตุ: ${reason}`, { parse_mode: 'HTML' }).then(m => setTimeout(()=>bot.deleteMessage(targetGroupId, m.message_id).catch(()=>{}), 60000));
           bot.editMessageText(`☢️ <b>Warn ครบ แบนอัตโนมัติสำเร็จ!</b>`, { chat_id: chatId, message_id: messageId, parse_mode: 'HTML' }).catch(()=>{});
         } else {
-          bot.sendMessage(targetGroupId, `☢️ <b>[ BIOHAZARD WARNING ]</b>\n👤 ${targetName}\n☢️ รังสี: [${warnBar}]\n⚠️ สาเหตุ: ${reason}\n🚨 เหลือโอกาส ${WARN_LIMIT - currentWarn} ครั้ง`, { parse_mode: 'HTML' }).then(m => setTimeout(()=>bot.deleteMessage(targetGroupId, m.message_id).catch(()=>{}), 60000));
+          bot.sendMessage(targetGroupId, `☢️ <b>[ WARN ]</b>\n👤 ${targetName}\n☢️ รังสี: [${warnBar}]\n⚠️ สาเหตุ: ${reason}\n🚨 เหลือโอกาส ${WARN_LIMIT - currentWarn} ครั้ง`, { parse_mode: 'HTML' }).then(m => setTimeout(()=>bot.deleteMessage(targetGroupId, m.message_id).catch(()=>{}), 60000));
           bot.editMessageText(`☢️ <b>Warn สำเร็จ [${currentWarn}/${WARN_LIMIT}]</b>`, { chat_id: chatId, message_id: messageId, parse_mode: 'HTML' }).catch(()=>{});
         }
       }
       else if (action === 'unwarn') {
         const newWarn = removeWarn(targetGroupId, targetUserId); await saveDailyData();
-        bot.sendMessage(targetGroupId, `🧬 <b>[ DNA DETOX ]</b>\n👤 ${targetName}\n☢️ รังสีลดลงเหลือ: [${newWarn}/${WARN_LIMIT}]`, { parse_mode: 'HTML' }).then(m => setTimeout(()=>bot.deleteMessage(targetGroupId, m.message_id).catch(()=>{}), 60000));
+        bot.sendMessage(targetGroupId, `🧬 <b>[ UNWARN ]</b>\n👤 ${targetName}\n☢️ รังสีเหลือ: [${newWarn}/${WARN_LIMIT}]`, { parse_mode: 'HTML' }).then(m => setTimeout(()=>bot.deleteMessage(targetGroupId, m.message_id).catch(()=>{}), 60000));
         bot.editMessageText(`🧬 <b>ถอนพิษ Unwarn สำเร็จ!</b>`, { chat_id: chatId, message_id: messageId, parse_mode: 'HTML' }).catch(()=>{});
       }
       else if (action === 'warncheck') {
         const currentW = getWarnCount(targetGroupId, targetUserId);
         bot.editMessageText(`🔬 <b>สแกน:</b> ${targetName}\n☢️ <b>รังสี:</b> [${currentW}/${WARN_LIMIT}]`, { chat_id: chatId, message_id: messageId, parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⬅️ กลับ', callback_data: `select_group_${groupId}` }]] }}).catch(()=>{});
-        return; // ไม่ต้อง setTimeout กลับไปหน้าเมนู
+        return; 
       }
       setTimeout(() => { restoreSubmenu(chatId, messageId, groupId); }, 2500);
       break;
@@ -408,7 +377,7 @@ bot.on('message', async (msg) => {
         const replyText = inputStr.substring(spaceIdx).trim();
         const mId = parseInt(url.split('/').pop());
         await bot.sendMessage(targetGroupId, replyText, { reply_to_message_id: mId });
-        bot.editMessageText(`📡 <b>ยิงคลื่นสัญญาณตอบกลับสำเร็จ!</b>`, { chat_id: chatId, message_id: messageId, parse_mode: 'HTML' }).catch(()=>{});
+        bot.editMessageText(`📡 <b>ยิงคลื่นตอบกลับสำเร็จ!</b>`, { chat_id: chatId, message_id: messageId, parse_mode: 'HTML' }).catch(()=>{});
       } catch (e) { bot.editMessageText(`❌ <b>ขัดข้อง:</b> ${e.message}`, { chat_id: chatId, message_id: messageId }).catch(()=>{}); }
       setTimeout(() => { restoreSubmenu(chatId, messageId, groupId); }, 2500);
       break;
@@ -437,23 +406,22 @@ bot.on('callback_query', async (query) => {
   const messageId = query.message.message_id;
   const data = query.data;
 
-  // --- 3.1 ฟังก์ชันของ Member: กดเพื่อส่งรูปแบบไม่ระบุตัวตน ---
+  // --- Member Functions ---
   if (data === 'send_anonymous') {
     if (!appSettings.isAcceptingPhotos) {
       return bot.answerCallbackQuery(query.id, { text: "❌ ขณะนี้ศูนย์บังคับการปิดรับรูปภาพชั่วคราวครับ", show_alert: true });
     }
     userStates[userId] = 'waiting_for_photo';
-    bot.sendMessage(chatId, "📸 <b>ส่งรูปภาพของคุณมาได้เลยครับ!</b>\n\nระบบจะปกปิดตัวตนของคุณเป็นความลับ", { parse_mode: 'HTML' });
+    bot.sendMessage(chatId, "📸 <b>ส่งรูปภาพของคุณมาได้เลยครับ!</b>", { parse_mode: 'HTML' });
     return bot.answerCallbackQuery(query.id);
   }
 
-  // 🛡️ --- [กำแพงป้องกัน] --- หากไม่ใช่แอดมิน ห้ามกดปุ่มที่เหลือเด็ดขาด
   if (!isAdmin) {
     apiCounter++; saveDailyData();
-    return bot.answerCallbackQuery(query.id, { text: '🚨 ปฏิเสธการเข้าถึง! โครงข่ายไม่รู้จักรหัสสัญญาณของคุณ', show_alert: true });
+    return bot.answerCallbackQuery(query.id, { text: '🚨 ปฏิเสธการเข้าถึง!', show_alert: true });
   }
 
-  // --- 3.2 ฟังก์ชันใหม่ของ Admin: จัดการรูปภาพนิรนาม ---
+  // --- Admin: จัดการรูป ---
   if (data.startsWith('approve_') || data.startsWith('reject_')) {
     const action = data.split('_')[0];
     const photoId = data.split('_')[1];
@@ -466,36 +434,39 @@ bot.on('callback_query', async (query) => {
       }
 
       if (action === 'approve') {
-        const targetGroup = TARGET_GROUPS[0].id; // ส่งไปที่กลุ่มแรกเสมอ
+        const targetGroup = TARGET_GROUPS[0].id; 
         await bot.sendPhoto(targetGroup, photoRecord.file_id, {
           caption: "📩 <b>ภาพใหม่ถูกส่งเข้ามา!</b> (ไม่ระบุตัวตน)", parse_mode: 'HTML'
         });
         photoRecord.status = 'approved';
-        await bot.editMessageCaption("✅ <b>อนุมัติแล้ว:</b> รูปถูกส่งเข้ากลุ่มสำเร็จ", { chat_id: chatId, message_id: messageId, parse_mode: 'HTML' });
+        // [อัปเดต] โชว์ ID เมื่อกด Accept
+        await bot.editMessageCaption(`✅ <b>อนุมัติแล้ว:</b> รูปจาก ID <code>${photoRecord.sender_id}</code> ถูกส่งเข้ากลุ่มสำเร็จ`, { chat_id: chatId, message_id: messageId, parse_mode: 'HTML' });
       } else {
         photoRecord.status = 'rejected';
-        await bot.editMessageCaption("❌ <b>ปฏิเสธแล้ว:</b> รูปนี้ถูกทำลายทิ้ง", { chat_id: chatId, message_id: messageId, parse_mode: 'HTML' });
+        await bot.editMessageCaption(`❌ <b>ปฏิเสธแล้ว:</b> รูปจาก ID <code>${photoRecord.sender_id}</code> ถูกทำลายทิ้ง`, { chat_id: chatId, message_id: messageId, parse_mode: 'HTML' });
       }
       photoRecord.processed_by = userId;
       photoRecord.processed_at = new Date();
       await photoRecord.save();
     } catch (e) {
-      bot.answerCallbackQuery(query.id, { text: "เกิดข้อผิดพลาดในการเข้าถึงฐานข้อมูล" });
+      bot.answerCallbackQuery(query.id, { text: "เกิดข้อผิดพลาดฐานข้อมูล" });
     }
     return bot.answerCallbackQuery(query.id);
   }
 
+  // --- Admin: ตั้งค่า & ประกาศปิดบอท ---
   if (data === 'admin_settings' || data === 'toggle_accept_photos') {
     if (data === 'toggle_accept_photos') appSettings.isAcceptingPhotos = !appSettings.isAcceptingPhotos;
     
     const statusText = appSettings.isAcceptingPhotos ? "✅ <b>เปิด</b>รับภาพนิรนาม" : "❌ <b>ปิด</b>รับภาพนิรนาม";
-    const toggleBtn = appSettings.isAcceptingPhotos ? "🔴 ปิดการรับภาพ" : "🟢 เปิดการรับภาพ";
+    const toggleBtn = appSettings.isAcceptingPhotos ? "🔴 ปิดรับรูปภาพ" : "🟢 เปิดรับรูปภาพ";
 
-    bot.editMessageText(`⚙️ <b>แผงตั้งค่า: ศูนย์รับภาพนิรนาม</b>\n\nสถานะปัจจุบัน: ${statusText}`, {
+    bot.editMessageText(`⚙️ <b>แผงตั้งค่า: ศูนย์รับภาพ & ระบบแจ้งเตือน</b>\n\nสถานะรับรูปปัจจุบัน: ${statusText}`, {
       chat_id: chatId, message_id: messageId, parse_mode: 'HTML',
       reply_markup: {
         inline_keyboard: [
           [{ text: toggleBtn, callback_data: "toggle_accept_photos" }],
+          [{ text: "📢 ประกาศเตือนปิดบอท (ลงกลุ่ม)", callback_data: "warn_shutdown" }],
           [{ text: '⬅️ กลับสู่แผงควบคุมหลัก', callback_data: 'back_to_main' }]
         ]
       }
@@ -503,7 +474,45 @@ bot.on('callback_query', async (query) => {
     return bot.answerCallbackQuery(query.id, data === 'toggle_accept_photos' ? { text: "บันทึกการตั้งค่าแล้ว!" } : undefined);
   }
 
-  // --- 3.3 ฟังก์ชันเดิมของ Admin: เมนูต่างๆ ---
+  // [อัปเดต] หน้าต่างยืนยันก่อนประกาศปิดบอท
+  if (data === 'warn_shutdown') {
+    bot.editMessageText(`⚠️ <b>ยืนยันการประกาศ</b>\nคุณต้องการส่งข้อความแจ้งเตือน "ปิดการใช้งานบอท" ลงในกลุ่มเป้าหมายใช่หรือไม่?\n\n<i>(เพื่อป้องกันการกดพลาด โปรดยืนยัน)</i>`, {
+      chat_id: chatId, message_id: messageId, parse_mode: 'HTML',
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "✅ ยืนยันส่งประกาศ", callback_data: "confirm_shutdown" }],
+          [{ text: "❌ ยกเลิก", callback_data: "admin_settings" }]
+        ]
+      }
+    }).catch(()=>{});
+    return bot.answerCallbackQuery(query.id);
+  }
+
+  // [อัปเดต] ยิงข้อความประกาศลงกลุ่มแรก
+  if (data === 'confirm_shutdown') {
+    try {
+      await bot.sendMessage(TARGET_GROUPS[0].id, "📢 <b>ประกาศจากระบบ:</b>\nขณะนี้บอทกำลังจะปิดการใช้งานระบบชั่วคราว/ถาวร ขออภัยในความไม่สะดวกและขอบคุณสมาชิกทุกท่านครับ 🛸", { parse_mode: 'HTML' });
+      bot.answerCallbackQuery(query.id, { text: "✅ ส่งประกาศลงกลุ่มเรียบร้อยแล้ว", show_alert: true });
+    } catch (e) {
+      bot.answerCallbackQuery(query.id, { text: "❌ ส่งประกาศไม่สำเร็จ", show_alert: true });
+    }
+    // ดึงกลับไปหน้า Settings
+    const statusText = appSettings.isAcceptingPhotos ? "✅ <b>เปิด</b>" : "❌ <b>ปิด</b>";
+    const toggleBtn = appSettings.isAcceptingPhotos ? "🔴 ปิดรับรูปภาพ" : "🟢 เปิดรับรูปภาพ";
+    bot.editMessageText(`⚙️ <b>แผงตั้งค่า: ศูนย์รับภาพ & ระบบแจ้งเตือน</b>\n\nสถานะรับรูปปัจจุบัน: ${statusText}\n\n✅ <i>ส่งประกาศลงกลุ่มสำเร็จแล้ว</i>`, {
+      chat_id: chatId, message_id: messageId, parse_mode: 'HTML',
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: toggleBtn, callback_data: "toggle_accept_photos" }],
+          [{ text: "📢 ประกาศเตือนปิดบอท (ลงกลุ่ม)", callback_data: "warn_shutdown" }],
+          [{ text: '⬅️ กลับสู่แผงควบคุมหลัก', callback_data: 'back_to_main' }]
+        ]
+      }
+    }).catch(()=>{});
+    return;
+  }
+
+  // --- Admin: เมนูย่อย ---
   if (data.startsWith('cancel_')) {
     const groupId = data.replace('cancel_', '');
     monitorSessions.delete(numUserId);
