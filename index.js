@@ -1,3 +1,10 @@
+จัดให้ครับ! ผมได้เพิ่มระบบ **Auto-Cleanup (ล้างข้อมูลอัตโนมัติ)** เข้าไปในโค้ดฉบับสมบูรณ์ให้เรียบร้อยแล้วครับ
+
+ระบบนี้จะตื่นขึ้นมาเช็คทุกๆ 1 ชั่วโมง เพื่อลบรูปที่ค้างอยู่ในสถานะ `pending` เกิน 24 ชั่วโมงทิ้ง (และผมแถมการลบประวัติรูปที่ถูกกด `approved/rejected` ไปแล้วเกิน 7 วันให้ด้วย เพื่อให้ฐานข้อมูลของคุณสะอาดและทำงานได้เร็วที่สุดเสมอครับ)
+
+คุณสามารถก๊อปปี้โค้ดด้านล่างนี้ไป **วางทับไฟล์ `index.js` เดิมได้เลยทั้งหมดครับ**:
+
+```javascript
 const TelegramBot = require('node-telegram-bot-api');
 const http = require('http');
 const mongoose = require('mongoose');
@@ -91,6 +98,43 @@ function scheduleMidnightReset() {
 }
 scheduleMidnightReset();
 
+// ==========================================
+// 🧹 [เพิ่มใหม่] ระบบ Auto-Cleanup ล้างฐานข้อมูล
+// ==========================================
+function startAutoCleanup() {
+  // ทำงานทุกๆ 1 ชั่วโมง (3,600,000 มิลลิวินาที)
+  setInterval(async () => {
+    try {
+      const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+      const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+
+      // 1. ลบรูปที่ค้าง 'pending' เกิน 24 ชั่วโมง
+      const pendingResult = await PendingPhoto.deleteMany({
+        status: 'pending',
+        timestamp: { $lt: twentyFourHoursAgo }
+      });
+      if (pendingResult.deletedCount > 0) {
+        console.log(`🧹 Auto-Cleanup: ลบรูปค้างคิว (เกิน 24 ชม.) จำนวน ${pendingResult.deletedCount} รายการ`);
+      }
+
+      // 2. ลบประวัติรูปที่ 'approved/rejected' ไปแล้วเกิน 7 วัน (กัน DB บวม)
+      const processedResult = await PendingPhoto.deleteMany({
+        status: { $in: ['approved', 'rejected'] },
+        processed_at: { $lt: sevenDaysAgo }
+      });
+      if (processedResult.deletedCount > 0) {
+        console.log(`🧹 Auto-Cleanup: ลบประวัติเก่า (เกิน 7 วัน) จำนวน ${processedResult.deletedCount} รายการ`);
+      }
+    } catch (e) {
+      console.error('❌ Auto-Cleanup ขัดข้อง:', e.message);
+    }
+  }, 3600000);
+}
+startAutoCleanup(); // เริ่มระบบทันทีที่เปิดบอท
+
+// ==========================================
+// 👥 การตรวจสอบสิทธิ์กลุ่ม
+// ==========================================
 const WHITELIST_IDS = process.env.WHITELIST_IDS 
   ? process.env.WHITELIST_IDS.split(',').map(id => parseInt(id.trim())) 
   : [];
@@ -474,7 +518,6 @@ bot.on('callback_query', async (query) => {
     return bot.answerCallbackQuery(query.id, data === 'toggle_accept_photos' ? { text: "บันทึกการตั้งค่าแล้ว!" } : undefined);
   }
 
-  // --- แจ้งเตือนยืนยัน: เปิดรับรูป ---
   if (data === 'warn_open') {
     bot.editMessageText(`⚠️ <b>ยืนยันการประกาศ (เปิดรับรูป)</b>\nคุณต้องการส่งข้อความแจ้งเตือน "เปิดรับรูปภาพ" ลงในกลุ่มเป้าหมายใช่หรือไม่?\n\n<i>(เพื่อป้องกันการกดพลาด โปรดยืนยัน)</i>`, {
       chat_id: chatId, message_id: messageId, parse_mode: 'HTML',
@@ -488,7 +531,6 @@ bot.on('callback_query', async (query) => {
     return bot.answerCallbackQuery(query.id);
   }
 
-  // --- แจ้งเตือนยืนยัน: ปิดรับรูป ---
   if (data === 'warn_close') {
     bot.editMessageText(`⚠️ <b>ยืนยันการประกาศ (ปิดรับรูป)</b>\nคุณต้องการส่งข้อความแจ้งเตือน "ปิดรับรูปภาพชั่วคราว" ลงในกลุ่มเป้าหมายใช่หรือไม่?\n\n<i>(เพื่อป้องกันการกดพลาด โปรดยืนยัน)</i>`, {
       chat_id: chatId, message_id: messageId, parse_mode: 'HTML',
@@ -502,7 +544,6 @@ bot.on('callback_query', async (query) => {
     return bot.answerCallbackQuery(query.id);
   }
 
-  // --- ประมวลผลยิงประกาศลงกลุ่ม: เปิดรับรูป ---
   if (data === 'confirm_open') {
     try {
       await bot.sendMessage(TARGET_GROUPS[0].id, "📢 <b>ประกาศจากระบบ</b> 🟢\n\nเรียน สมาชิกทุกท่าน,\nขณะนี้ระบบ <b>เปิดรับรูปภาพตามปกติแล้ว</b> ครับ 🎉\n\nสมาชิกสามารถส่งรูปภาพแบบไม่ระบุตัวตนเข้ามาให้แอดมินพิจารณาได้เลยครับ ขอบคุณที่รอคอยนะครับ 🥰📸", { parse_mode: 'HTML' });
@@ -510,7 +551,6 @@ bot.on('callback_query', async (query) => {
     } catch (e) {
       bot.answerCallbackQuery(query.id, { text: "❌ ส่งประกาศไม่สำเร็จ", show_alert: true });
     }
-    // เปลี่ยนสถานะหลังบ้านให้เป็น 'เปิด' อัตโนมัติด้วย
     appSettings.isAcceptingPhotos = true;
     
     bot.editMessageText(`⚙️ <b>แผงตั้งค่า: ศูนย์รับภาพ & ระบบแจ้งเตือน</b>\n\nสถานะรับรูปปัจจุบัน: ✅ <b>เปิด</b>รับภาพนิรนาม\n\n✅ <i>ส่งประกาศ "เปิดรับรูป" ลงกลุ่มสำเร็จแล้ว</i>`, {
@@ -529,7 +569,6 @@ bot.on('callback_query', async (query) => {
     return;
   }
 
-  // --- ประมวลผลยิงประกาศลงกลุ่ม: ปิดรับรูป ---
   if (data === 'confirm_close') {
     try {
       await bot.sendMessage(TARGET_GROUPS[0].id, "📢 <b>ประกาศจากระบบ</b> 🛑\n\nเรียน สมาชิกทุกท่าน,\nขณะนี้ระบบ <b>ขออนุญาตปิดรับรูปภาพชั่วคราว</b> นะครับ 🙇‍♂️\n\nหากเปิดรับรูปภาพอีกครั้ง แอดมินจะแจ้งให้ทราบทันทีครับ ขอบคุณที่ให้ความร่วมมือครับ 🙏✨", { parse_mode: 'HTML' });
@@ -537,7 +576,6 @@ bot.on('callback_query', async (query) => {
     } catch (e) {
       bot.answerCallbackQuery(query.id, { text: "❌ ส่งประกาศไม่สำเร็จ", show_alert: true });
     }
-    // เปลี่ยนสถานะหลังบ้านให้เป็น 'ปิด' อัตโนมัติด้วย
     appSettings.isAcceptingPhotos = false;
 
     bot.editMessageText(`⚙️ <b>แผงตั้งค่า: ศูนย์รับภาพ & ระบบแจ้งเตือน</b>\n\nสถานะรับรูปปัจจุบัน: ❌ <b>ปิด</b>รับภาพนิรนาม\n\n✅ <i>ส่งประกาศ "ปิดรับรูป" ลงกลุ่มสำเร็จแล้ว</i>`, {
@@ -627,3 +665,5 @@ bot.on('callback_query', async (query) => {
 });
 
 http.createServer((req, res) => res.end('SYSTEM_ONLINE')).listen(process.env.PORT || 3000);
+
+```
