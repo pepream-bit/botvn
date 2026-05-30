@@ -220,7 +220,7 @@ function sendMainMenu(chatId, messageId = null) {
     [{ text: `⚙️ ศูนย์ตั้งค่า & ประกาศปิด/เปิดรับรูป`, callback_data: `admin_settings` }]
   );
 
-  const text = "🛸 <b>แผงควบคุมหลัก: PLUMECE SYSTEM</b>\nโปรดเลือกคำสั่ง:";
+  const text = "🛸 <b>แผงควบคุมหลัก:SYSTEM</b>\nโปรดเลือกคำสั่ง:";
   const options = { parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard } };
 
   if (messageId) bot.editMessageText(text, { chat_id: chatId, message_id: messageId, ...options }).catch(()=>{});
@@ -269,7 +269,7 @@ bot.on('message', async (msg) => {
       const savedPhoto = await newPhoto.save();
       const photoDbId = savedPhoto._id.toString();
 
-      await bot.sendMessage(msg.chat.id, "✅ <b>ส่งรูปภาพสำเร็จ 1 รูป</b>\nระบบส่งให้แอดมินพิจารณาแล้วครับ", { parse_mode: 'HTML' });
+      await bot.sendMessage(msg.chat.id, "✅ <b>ส่งรูปภาพสำเร็จ 1 รูป</b>\nระบบกำลังประมวลผล", { parse_mode: 'HTML' });
 
       for (const adminId of WHITELIST_IDS) {
         try {
@@ -302,7 +302,7 @@ bot.on('message', async (msg) => {
     } else {
       if (!appSettings.isAcceptingPhotos) return;
 
-      bot.sendMessage(msg.chat.id, "สวัสดีครับ 🎭\nหากคุณต้องการแบ่งปันรูปภาพ สามารถกดปุ่มด้านล่างเพื่อส่งแบบไม่ระบุตัวตนให้แอดมินได้เลยครับ", {
+      bot.sendMessage(msg.chat.id, "สวัสดีครับ 🎭\nหากคุณต้องการแบ่งปันรูปภาพ สามารถกดปุ่มด้านล่างเพื่อส่งแบบไม่ระบุตัวตน", {
         reply_markup: {
           inline_keyboard: [[{ text: "📸 ส่งรูปแบบไม่ระบุตัวตน", callback_data: "send_anonymous" }]]
         }
