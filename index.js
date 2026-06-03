@@ -230,6 +230,11 @@ function sendMainMenu(chatId, messageId = null) {
     { text: `👥 รายชื่อ Whitelist`, callback_data: `view_whitelist` }
   ]);
 
+  // 🛑 เพิ่มปุ่ม ปิดหน้าต่างแผงควบคุม
+  keyboard.push([
+    { text: `❌ ปิดหน้าต่างแผงควบคุม (Close)`, callback_data: `close_main_menu` }
+  ]);
+
   const text = "🛸 <b>แผงควบคุมหลัก: กองทัพเอเลี่ยนต่างดาว (Alien Command)</b>\nโปรดเลือกเซกเตอร์ดาวเทียมที่คุณต้องการจัดการ:";
   const options = { parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard } };
 
@@ -308,6 +313,14 @@ bot.on('callback_query', async (query) => {
     saveDailyData();
     sendMainMenu(chatId, messageId);
     return bot.answerCallbackQuery(query.id);
+  }
+
+  // 🛑 เพิ่มคำสั่ง ปิดหน้าต่างแผงควบคุม
+  if (data === 'close_main_menu') {
+    apiCounter++;
+    saveDailyData();
+    bot.deleteMessage(chatId, messageId).catch(()=>{});
+    return bot.answerCallbackQuery(query.id, { text: 'ปิดหน้าจอแผงควบคุมเรียบร้อย 🛸' });
   }
 
   if (data === 'view_api_limits') {
