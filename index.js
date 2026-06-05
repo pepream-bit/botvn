@@ -8,7 +8,6 @@ const mongoose = require('mongoose');
 const token = process.env.BOT_TOKEN;
 const mongoUri = process.env.MONGODB_URI;
 
-// ปรับปรุงระบบตรวจสอบ LOG_CHANNEL_ID ให้ยืดหยุ่น รองรับทั้ง ตัวเลข ID และ @username แชนแนล
 const LOG_CHANNEL_ID = process.env.LOG_CHANNEL_ID 
   ? (isNaN(process.env.LOG_CHANNEL_ID) ? process.env.LOG_CHANNEL_ID.trim() : parseInt(process.env.LOG_CHANNEL_ID.trim())) 
   : null;
@@ -18,7 +17,6 @@ if (!token || !LOG_CHANNEL_ID || !mongoUri) {
   process.exit(1);
 }
 
-// 💽 เชื่อมต่อโครงข่ายฐานข้อมูล MongoDB
 mongoose.connect(mongoUri)
   .then(() => console.log('💽 Nebula Database Connected! ระบบหน่วยความจำระยะยาวทำงานสมบูรณ์'))
   .catch(err => {
@@ -26,7 +24,6 @@ mongoose.connect(mongoUri)
     process.exit(1);
   });
 
-// กำหนดพิมพ์เขียวข้อมูล (Schema & Model)
 const SystemDataSchema = new mongoose.Schema({
   date: String,
   apiCounter: { type: Number, default: 0 },
@@ -35,23 +32,19 @@ const SystemDataSchema = new mongoose.Schema({
 
 const SystemData = mongoose.model('SystemData', SystemDataSchema);
 
-// 🌌 หน่วยความจำแคช (เก็บชื่อเล่นและแปลง Username เป็น ID ชั่วคราว)
 const usernameCache = {};
 
-// ☢️ ข้อมูลคำเตือนและโควตา (Sync กับ MongoDB)
 let warnData = {};
 const WARN_LIMIT = 2;
 let apiCounter = 0;
 const API_DAILY_MAX = 50000;
 
-// 🗂️ เซสชันควบคุมหน้าจอทีวีของโอเปอเรเตอร์
 const monitorSessions = new Map();
 
-// 🇹🇭 ฟังก์ชันจัดการเวลาประเทศไทย (Asia/Bangkok Zone)
 function getTodayDate() {
   const now = new Date();
   const formatter = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Bangkok', year: 'numeric', month: '2-digit', day: '2-digit' });
-  return formatter.format(now); // ส่งกลับค่าเป็น YYYY-MM-DD ตามเวลาไทยเป๊ะๆ
+  return formatter.format(now);
 }
 
 function getThailandTimestamp() {
@@ -66,7 +59,6 @@ function getMsUntilThailandMidnight() {
   return bangkokMidnight - bangkokTime;
 }
 
-// 📂 ฟังก์ชันจัดการข้อมูลถาวรผ่าน Cloud
 async function loadDailyData() {
   try {
     let data = await SystemData.findOne({ date: getTodayDate() });
@@ -97,10 +89,8 @@ async function saveDailyData() {
   }
 }
 
-// โหลดข้อมูลทันทีเมื่อบอทเริ่มทำงาน
 loadDailyData();
 
-// ตั้งเวลารีเซตค่าทุกเที่ยงคืนเป๊ะ ตามเวลาประเทศไทย 🇹🇭
 function scheduleMidnightReset() {
   const msUntilMidnight = getMsUntilThailandMidnight();
   setTimeout(async () => {
@@ -113,12 +103,10 @@ function scheduleMidnightReset() {
 }
 scheduleMidnightReset();
 
-// 👥 แปลงรายชื่อระบบ Whitelist จาก Environment
 const WHITELIST_IDS = process.env.WHITELIST_IDS 
   ? process.env.WHITELIST_IDS.split(',').map(id => parseInt(id.trim())) 
   : [];
 
-// 🛰️ แปลงกลุ่มเป้าหมาย (รูปแบบ ID:ชื่อ,ID:ชื่อ)
 const TARGET_GROUPS = [];
 if (process.env.TARGET_GROUPS) {
   process.env.TARGET_GROUPS.split(',').forEach(item => {
@@ -138,6 +126,19 @@ const bot = new TelegramBot(token, { polling: true });
 console.log('🛸 บอท Alien Invasion พร้อมลุยในอวกาศแล้ว!');
 
 // ==========================================
+// 🔗 ฟังก์ชันช่วยสร้างลิงก์สำหรับกระโดดไปดูข้อความในกลุ่ม
+// ==========================================
+function buildMessageLink(chatId, messageId) {
+  const strId = chatId.toString();
+  if (strId.startsWith('-100')) {
+    return `https://t.me/c/${strId.replace('-100', '')}/${messageId}`;
+  } else if (strId.startsWith('@')) {
+    return `https://t.me/${strId.replace('@', '')}/${messageId}`;
+  }
+  return null;
+}
+
+// ==========================================
 // 📡 ฟังก์ชันสำหรับส่ง Log ไปยังแชนแนลอย่างปลอดภัย
 // ==========================================
 async function sendSystemLog(message) {
@@ -146,7 +147,7 @@ async function sendSystemLog(message) {
     apiCounter++;
     await bot.sendMessage(LOG_CHANNEL_ID, message, { parse_mode: 'HTML' });
   } catch (err) {
-    console.error(`❌ ไม่สามารถส่งข่าวสารเข้า Log Channel ได้ (กรุณาเช็กว่าบอทเป็น Admin ในแชนแนลหรือยัง):`, err.message);
+    console.error(`❌ ไม่สามารถส่งข่าวสารเข้า Log Channel ได้:`, err.message);
   }
 }
 
@@ -230,7 +231,6 @@ function sendMainMenu(chatId, messageId = null) {
     { text: `👥 รายชื่อ Whitelist`, callback_data: `view_whitelist` }
   ]);
 
-  // 🛑 เพิ่มปุ่ม ปิดหน้าต่างแผงควบคุม
   keyboard.push([
     { text: `❌ ปิดหน้าต่างแผงควบคุม (Close)`, callback_data: `close_main_menu` }
   ]);
@@ -315,7 +315,6 @@ bot.on('callback_query', async (query) => {
     return bot.answerCallbackQuery(query.id);
   }
 
-  // 🛑 เพิ่มคำสั่ง ปิดหน้าต่างแผงควบคุม
   if (data === 'close_main_menu') {
     apiCounter++;
     saveDailyData();
@@ -411,42 +410,34 @@ bot.on('callback_query', async (query) => {
 bot.on('message', async (msg) => {
   if (!msg.from) return;
 
-  // บันทึกและดึงข้อมูลชื่อจาก cache
   const fullName = `${msg.from.first_name || ''} ${msg.from.last_name || ''}`.trim() || msg.from.username || `ID:${msg.from.id}`;
   usernameCache[`id_${msg.from.id}`] = { id: msg.from.id, name: fullName };
   if (msg.from.username) {
     usernameCache[msg.from.username.toLowerCase().replace('@', '')] = { id: msg.from.id, name: fullName };
   }
 
-  // 🛡️ [ANTI-IMPERSONATION] ระบบสแกนและแบนมิจฉาชีพที่ปลอมแปลงตั้งชื่อเหมือนกลุ่ม/ทีมงาน
+  // 🛡️ [ANTI-IMPERSONATION]
   const isTargetGroup = TARGET_GROUPS.some(g => g.id === msg.chat.id);
   if (isTargetGroup && !WHITELIST_IDS.includes(msg.from.id)) {
     const senderFullName = `${msg.from.first_name || ''} ${msg.from.last_name || ''}`.toLowerCase();
     const IMPERSONATOR_NAMES = process.env.IMPERSONATOR_NAMES ? process.env.IMPERSONATOR_NAMES.split(',').map(n => n.trim().toLowerCase()) : [];
     
-    // ตรวจสอบว่าชื่อผู้ส่งมีคำต้องห้ามหรือไม่
     const isMijji = IMPERSONATOR_NAMES.some(bName => senderFullName.includes(bName));
 
     if (isMijji) {
       try {
         apiCounter += 2;
         await saveDailyData();
-        
-        // ดีดมิจฉาชีพออกจากวงโคจรทันที
         await bot.banChatMember(msg.chat.id, msg.from.id);
         await bot.deleteMessage(msg.chat.id, msg.message_id);
-        
-        // ส่งรายงานเข้า Channel พร้อมระบุเวลาไทยอย่างแม่นยำ
         await sendSystemLog(`🚫 <b>[ANTI-IMPERSONATION BAN]</b>\nพบมิจฉาชีพตั้งชื่อเลียนแบบระบบและพยายามสแปมกลุ่ม!\n👤 ชื่อที่ตรวจพบ: <code>${fullName}</code> (🆔 <code>${msg.from.id}</code>)\n📍 เซกเตอร์กลุ่ม: <code>${msg.chat.title || msg.chat.id}</code>\n📅 เวลา (ไทย): <code>${getThailandTimestamp()}</code>`);
-        
-        return; // ทำลายโปรโตคอลข้อความนี้ทิ้งทันที
+        return;
       } catch (e) {
         console.error("❌ ไม่สามารถประมวลผลการแบนชื่อมิจฉาชีพได้:", e.message);
       }
     }
   }
 
-  // ระบบดั้งเดิม: กรองเฉพาะข้อความที่ส่งมาจาก Whitelist เพื่อควบคุมหน้าจอ Operator TV
   if (!WHITELIST_IDS.includes(msg.from.id)) return;
   if (msg.text && msg.text.startsWith('/start')) return;
 
@@ -470,21 +461,41 @@ bot.on('message', async (msg) => {
   let resolved, targetUserId, targetName;
 
   switch (action) {
-    case 'ann':
+
+    // ✅ ฟังก์ชันใหม่: ann — มีปุ่มลิงก์ข้อความ ไม่ auto-close
+    case 'ann': {
       apiCounter += 2;
       await saveDailyData();
       monitorSessions.delete(msg.from.id);
       try {
-        await bot.copyMessage(targetGroupId, msg.chat.id, msg.message_id);
+        const copiedMsg = await bot.copyMessage(targetGroupId, msg.chat.id, msg.message_id);
         bot.deleteMessage(msg.chat.id, msg.message_id).catch(() => {});
-        bot.editMessageText(`📡 <b>ส่งสัญญาณประกาศไปยังเป้าหมายเนทีฟสำเร็จ!</b>\n\n<i>🛰️ กำลังคืนค่าหน้าจอหลัก...</i>`, { chat_id: chatId, message_id: messageId, parse_mode: 'HTML' }).catch(()=>{});
-      } catch (e) {
-        bot.editMessageText(`❌ <b>ส่งประกาศล้มเหลว:</b> ${e.message}\n\n<i>🛰️ กำลังคืนค่าหน้าจอหลัก...</i>`, { chat_id: chatId, message_id: messageId, parse_mode: 'HTML' }).catch(()=>{});
-      }
-      setTimeout(() => { restoreSubmenu(chatId, messageId, groupId); }, 2500);
-      break;
+        
+        const msgLink = buildMessageLink(targetGroupId, copiedMsg.message_id);
+        const inlineKey = [
+          [{ text: '⬅️ กลับสู่แผงควบคุมเซกเตอร์', callback_data: `select_group_${groupId}` }]
+        ];
+        if (msgLink) inlineKey.unshift([{ text: '📢 เปิดดูข้อความประกาศในเซกเตอร์', url: msgLink }]);
 
-    case 'capture_url':
+        bot.editMessageText(`📡 <b>ส่งสัญญาณประกาศไปยังเป้าหมายสำเร็จ!</b>`, { 
+          chat_id: chatId, 
+          message_id: messageId, 
+          parse_mode: 'HTML',
+          reply_markup: { inline_keyboard: inlineKey }
+        }).catch(()=>{});
+      } catch (e) {
+        bot.editMessageText(`❌ <b>ส่งประกาศล้มเหลว:</b> ${e.message}`, { 
+          chat_id: chatId, 
+          message_id: messageId, 
+          parse_mode: 'HTML',
+          reply_markup: { inline_keyboard: [[{ text: '⬅️ กลับสู่แผงควบคุม', callback_data: `select_group_${groupId}` }]] }
+        }).catch(()=>{});
+      }
+      break;
+    }
+
+    // ✅ ฟังก์ชันใหม่: capture_url — มีปุ่มลิงก์ต้นทาง ไม่ auto-close
+    case 'capture_url': {
       apiCounter++;
       await saveDailyData();
       bot.editMessageText(`⏳ <b>[STEALTH CAPTURE]</b>\nกำลังดึงสัญญาณโครงข่ายไร้ร่องรอย... โปรดรอสักครู่`, { chat_id: chatId, message_id: messageId, parse_mode: 'HTML' }).catch(()=>{});
@@ -507,12 +518,84 @@ bot.on('message', async (msg) => {
         await saveDailyData();
         await bot.copyMessage(msg.from.id, tChatId, mId);
         
-        bot.editMessageText(`🛸 <b>ดึงสื่อสำเร็จ</b>\nส่งตรงไปยังกล่องรับสัญญาณส่วนตัวของคุณเรียบร้อย!\n\n<i>🛰️ กำลังคืนค่าหน้าจอหลัก...</i>`, { chat_id: chatId, message_id: messageId, parse_mode: 'HTML' }).catch(()=>{});
+        const inlineKey = [
+          [{ text: '🔗 เปิดดูพิกัดสื่อต้นทาง', url: inputStr }],
+          [{ text: '⬅️ กลับสู่แผงควบคุมเซกเตอร์', callback_data: `select_group_${groupId}` }]
+        ];
+
+        bot.editMessageText(`🛸 <b>ดึงสื่อสำเร็จ</b>\nส่งตรงไปยังกล่องรับสัญญาณส่วนตัวของคุณเรียบร้อย!`, { 
+          chat_id: chatId, 
+          message_id: messageId, 
+          parse_mode: 'HTML',
+          reply_markup: { inline_keyboard: inlineKey }
+        }).catch(()=>{});
       } catch (e) {
-        bot.editMessageText(`❌ <b>เกิดข้อผิดพลาดในการดึงสื่อ:</b> <code>${e.message}</code>\n\n<i>🛰️ กำลังคืนค่าหน้าจอหลัก...</i>`, { chat_id: chatId, message_id: messageId, parse_mode: 'HTML' }).catch(()=>{});
+        bot.editMessageText(`❌ <b>เกิดข้อผิดพลาดในการดึงสื่อ:</b> <code>${e.message}</code>`, { 
+          chat_id: chatId, 
+          message_id: messageId, 
+          parse_mode: 'HTML',
+          reply_markup: { inline_keyboard: [[{ text: '⬅️ กลับสู่แผงควบคุม', callback_data: `select_group_${groupId}` }]] }
+        }).catch(()=>{});
       }
-      setTimeout(() => { restoreSubmenu(chatId, messageId, groupId); }, 2500);
       break;
+    }
+
+    // ✅ ฟังก์ชันใหม่: replylink — มีปุ่มลิงก์ข้อความที่ส่ง ไม่ auto-close
+    case 'replylink': {
+      apiCounter++;
+      await saveDailyData();
+      monitorSessions.delete(msg.from.id);
+      try {
+        spaceIdx = inputStr.indexOf(' ');
+        if (spaceIdx === -1) throw new Error("โปรดใส่ข้อความเพื่อตอบกลับหลังเคาะเว้นวรรคลิงก์พิกัด");
+
+        const url = inputStr.substring(0, spaceIdx).trim();
+        const replyText = inputStr.substring(spaceIdx).trim();
+        let tChatId, mId;
+
+        if (url.includes('/c/')) {
+          const parts = url.split('/');
+          mId = parseInt(parts.pop());
+          tChatId = parseInt("-100" + parts.pop());
+        } else {
+          const parts = url.split('/');
+          mId = parseInt(parts.pop());
+          tChatId = "@" + parts.pop();
+        }
+        if (!tChatId || isNaN(mId)) throw new Error("พิกัด URL ของสารข้อความไม่สมบูรณ์");
+
+        apiCounter += 2;
+        await saveDailyData();
+        
+        const sentMsg = await bot.sendMessage(targetGroupId, replyText, { reply_to_message_id: mId });
+        const msgLink = buildMessageLink(targetGroupId, sentMsg.message_id);
+
+        const inlineKey = [
+          [{ text: '⬅️ กลับสู่แผงควบคุมเซกเตอร์', callback_data: `select_group_${groupId}` }]
+        ];
+        
+        if (msgLink) {
+          inlineKey.unshift([{ text: '💬 เปิดดูข้อความตอบกลับของคุณ', url: msgLink }]);
+        } else {
+          inlineKey.unshift([{ text: '🔗 เปิดดูพิกัดต้นทาง', url: url }]);
+        }
+
+        bot.editMessageText(`📡 <b>ยิงคลื่นสารสัญญาณตอบกลับสำเร็จแล้ว!</b>`, { 
+          chat_id: chatId, 
+          message_id: messageId, 
+          parse_mode: 'HTML',
+          reply_markup: { inline_keyboard: inlineKey }
+        }).catch(()=>{});
+      } catch (e) {
+        bot.editMessageText(`❌ <b>ยิงสัญญาณสารล้มเหลว:</b> <code>${e.message}</code>`, { 
+          chat_id: chatId, 
+          message_id: messageId, 
+          parse_mode: 'HTML',
+          reply_markup: { inline_keyboard: [[{ text: '⬅️ กลับสู่แผงควบคุม', callback_data: `select_group_${groupId}` }]] }
+        }).catch(()=>{});
+      }
+      break;
+    }
 
     case 'warn':
       apiCounter++;
@@ -588,32 +671,34 @@ bot.on('message', async (msg) => {
       targetName = resolved.name || await resolveName(targetUserId, targetGroupId);
       monitorSessions.delete(msg.from.id);
 
-      const oldWarn = getWarnCount(targetGroupId, targetUserId);
-      if (oldWarn === 0) {
-        bot.editMessageText(`🧬 <b>เป้าหมายไม่มีค่ารังสีตกค้างอยู่แล้ว</b>\n\n<i>🛰️ กำลังคืนค่าหน้าจอหลัก...</i>`, { chat_id: chatId, message_id: messageId, parse_mode: 'HTML' }).catch(()=>{});
-        setTimeout(() => { restoreSubmenu(chatId, messageId, groupId); }, 2500);
-        break;
-      }
+      {
+        const oldWarn = getWarnCount(targetGroupId, targetUserId);
+        if (oldWarn === 0) {
+          bot.editMessageText(`🧬 <b>เป้าหมายไม่มีค่ารังสีตกค้างอยู่แล้ว</b>\n\n<i>🛰️ กำลังคืนค่าหน้าจอหลัก...</i>`, { chat_id: chatId, message_id: messageId, parse_mode: 'HTML' }).catch(()=>{});
+          setTimeout(() => { restoreSubmenu(chatId, messageId, groupId); }, 2500);
+          break;
+        }
 
-      const currentWarn = removeWarn(targetGroupId, targetUserId);
-      await saveDailyData();
-      const unwarnBar = buildWarnBar(currentWarn, WARN_LIMIT);
-
-      try {
-        apiCounter += 3;
+        const currentWarn = removeWarn(targetGroupId, targetUserId);
         await saveDailyData();
-        const m = await bot.sendMessage(targetGroupId,
-          `🧬 <b>[ DETOXIFICATION COMPLETE ]</b>\n👤 <b>เป้าหมาย:</b> <a href="tg://user?id=${targetUserId}">${targetName}</a>\n☢️ ระดับรังสีคงเหลือ: [${unwarnBar}] ${currentWarn}/${WARN_LIMIT}\n💉 บันทึกแพทย์: <code>${reason}</code>`,
-          { parse_mode: 'HTML' }
-        );
-        setTimeout(() => { bot.deleteMessage(targetGroupId, m.message_id).catch(() => {}); }, 60000);
+        const unwarnBar = buildWarnBar(currentWarn, WARN_LIMIT);
 
-        await sendSystemLog(`📜 <b>[ UNWARN LOG ]</b>\nเซกเตอร์: ${groupName}\nเป้าหมาย: ${targetName} (🆔 <code>${targetUserId}</code>) | ค่าลดลง: ${oldWarn} → ${currentWarn}\n📅 เวลา (ไทย): <code>${getThailandTimestamp()}</code>`);
-        bot.editMessageText(`🧬 <b>บำบัดดีเอ็นเอ Unwarn สำเร็จ!</b>\nระดับพลังงานพิษลดลงเหลือชุดควบคุมปัจจุบัน\n\n<i>🛰️ กำลังคืนค่าหน้าจอหลัก...</i>`, { chat_id: chatId, message_id: messageId, parse_mode: 'HTML' }).catch(()=>{});
-      } catch (e) {
-        bot.editMessageText(`⚠️ <b>เกิดข้อผิดพลาดในการแก้สถานะ:</b> <code>${e.message}</code>`, { chat_id: chatId, message_id: messageId, parse_mode: 'HTML' }).catch(()=>{});
+        try {
+          apiCounter += 3;
+          await saveDailyData();
+          const m = await bot.sendMessage(targetGroupId,
+            `🧬 <b>[ DETOXIFICATION COMPLETE ]</b>\n👤 <b>เป้าหมาย:</b> <a href="tg://user?id=${targetUserId}">${targetName}</a>\n☢️ ระดับรังสีคงเหลือ: [${unwarnBar}] ${currentWarn}/${WARN_LIMIT}\n💉 บันทึกแพทย์: <code>${reason}</code>`,
+            { parse_mode: 'HTML' }
+          );
+          setTimeout(() => { bot.deleteMessage(targetGroupId, m.message_id).catch(() => {}); }, 60000);
+
+          await sendSystemLog(`📜 <b>[ UNWARN LOG ]</b>\nเซกเตอร์: ${groupName}\nเป้าหมาย: ${targetName} (🆔 <code>${targetUserId}</code>) | ค่าลดลง: ${oldWarn} → ${currentWarn}\n📅 เวลา (ไทย): <code>${getThailandTimestamp()}</code>`);
+          bot.editMessageText(`🧬 <b>บำบัดดีเอ็นเอ Unwarn สำเร็จ!</b>\nระดับพลังงานพิษลดลงเหลือชุดควบคุมปัจจุบัน\n\n<i>🛰️ กำลังคืนค่าหน้าจอหลัก...</i>`, { chat_id: chatId, message_id: messageId, parse_mode: 'HTML' }).catch(()=>{});
+        } catch (e) {
+          bot.editMessageText(`⚠️ <b>เกิดข้อผิดพลาดในการแก้สถานะ:</b> <code>${e.message}</code>`, { chat_id: chatId, message_id: messageId, parse_mode: 'HTML' }).catch(()=>{});
+        }
+        setTimeout(() => { restoreSubmenu(chatId, messageId, groupId); }, 2500);
       }
-      setTimeout(() => { restoreSubmenu(chatId, messageId, groupId); }, 2500);
       break;
 
     case 'warncheck':
@@ -631,49 +716,18 @@ bot.on('message', async (msg) => {
       targetName = resolved.name || await resolveName(targetUserId, targetGroupId);
       monitorSessions.delete(msg.from.id);
 
-      const checkWarn = getWarnCount(targetGroupId, targetUserId);
-      const chkBar = buildWarnBar(checkWarn, WARN_LIMIT);
-      const chkText = checkWarn === 0 ? '✅ คลื่นความถี่ปกติ ไม่มีสารพิษ' : checkWarn >= WARN_LIMIT ? '🚨 ระดับสีแดงวิกฤต (อยู่ภายใต้โปรโตคอลแบน)' : `⚠️ มีประวัติสะสมรังสี ควรรักษาความเงียบงัน`;
+      {
+        const checkWarn = getWarnCount(targetGroupId, targetUserId);
+        const chkBar = buildWarnBar(checkWarn, WARN_LIMIT);
+        const chkText = checkWarn === 0 ? '✅ คลื่นความถี่ปกติ ไม่มีสารพิษ' : checkWarn >= WARN_LIMIT ? '🚨 ระดับสีแดงวิกฤต (อยู่ภายใต้โปรโตคอลแบน)' : `⚠️ มีประวัติสะสมรังสี ควรรักษาความเงียบงัน`;
 
-      bot.editMessageText(`🔬 <b>[ BIO-SCANNER MONITOR REPORT ]</b>\n━━━━━━━━━━━━━━━━━━━━\n👤 <b>ชื่อชีวภาพ:</b> ${targetName}\n🆔 <b>เลขโครงข่าย:</b> <code>${targetUserId}</code>\n🛰️ <b>เซกเตอร์ยึดครอง:</b> ${groupName}\n☢️ <b>ดัชนีรังสี:</b> [${chkBar}] ${checkWarn}/${WARN_LIMIT}\n📊 <b>สถานะวิเคราะห์:</b> ${chkText}\n━━━━━━━━━━━━━━━━━━━━`, {
-        chat_id: chatId,
-        message_id: messageId,
-        parse_mode: 'HTML',
-        reply_markup: { inline_keyboard: [[{ text: '⬅️ กลับสู่แผงควบคุมเซกเตอร์', callback_data: `select_group_${groupId}` }]] }
-      }).catch(()=>{});
-      break;
-
-    case 'replylink':
-      apiCounter++;
-      await saveDailyData();
-      monitorSessions.delete(msg.from.id);
-      try {
-        spaceIdx = inputStr.indexOf(' ');
-        if (spaceIdx === -1) throw new Error("โปรดใส่ข้อความเพื่อตอบกลับหลังเคาะเว้นวรรคลิงก์พิกัด");
-
-        const url = inputStr.substring(0, spaceIdx).trim();
-        const replyText = inputStr.substring(spaceIdx).trim();
-        let tChatId, mId;
-
-        if (url.includes('/c/')) {
-          const parts = url.split('/');
-          mId = parseInt(parts.pop());
-          tChatId = parseInt("-100" + parts.pop());
-        } else {
-          const parts = url.split('/');
-          mId = parseInt(parts.pop());
-          tChatId = "@" + parts.pop();
-        }
-        if (!tChatId || isNaN(mId)) throw new Error("พิกัด URL ของสารข้อความไม่สมบูรณ์");
-
-        apiCounter += 2;
-        await saveDailyData();
-        await bot.sendMessage(targetGroupId, replyText, { reply_to_message_id: mId });
-        bot.editMessageText(`📡 <b>ยิงคลื่นสารสัญญาณตอบกลับสำเร็จแล้ว!</b>\n\n<i>🛰️ กำลังคืนค่าหน้าจอหลัก...</i>`, { chat_id: chatId, message_id: messageId, parse_mode: 'HTML' }).catch(()=>{});
-      } catch (e) {
-        bot.editMessageText(`❌ <b>ยิงสัญญาณสารล้มเหลว:</b> <code>${e.message}</code>\n\n<i>🛰️ กำลังคืนค่าหน้าจอหลัก...</i>`, { chat_id: chatId, message_id: messageId, parse_mode: 'HTML' }).catch(()=>{});
+        bot.editMessageText(`🔬 <b>[ BIO-SCANNER MONITOR REPORT ]</b>\n━━━━━━━━━━━━━━━━━━━━\n👤 <b>ชื่อชีวภาพ:</b> ${targetName}\n🆔 <b>เลขโครงข่าย:</b> <code>${targetUserId}</code>\n🛰️ <b>เซกเตอร์ยึดครอง:</b> ${groupName}\n☢️ <b>ดัชนีรังสี:</b> [${chkBar}] ${checkWarn}/${WARN_LIMIT}\n📊 <b>สถานะวิเคราะห์:</b> ${chkText}\n━━━━━━━━━━━━━━━━━━━━`, {
+          chat_id: chatId,
+          message_id: messageId,
+          parse_mode: 'HTML',
+          reply_markup: { inline_keyboard: [[{ text: '⬅️ กลับสู่แผงควบคุมเซกเตอร์', callback_data: `select_group_${groupId}` }]] }
+        }).catch(()=>{});
       }
-      setTimeout(() => { restoreSubmenu(chatId, messageId, groupId); }, 2500);
       break;
 
     case 'ban':
@@ -703,7 +757,6 @@ bot.on('message', async (msg) => {
         const m = await bot.sendMessage(targetGroupId, `🔴 <b>[ PROTOCOL VAPORIZED - BAN ]</b>\n👤 <b>เป้าหมาย:</b> <b>${targetName}</b> (🆔 <code>${targetUserId}</code>)\n🚨 ข้อหา: <code>${reason}</code>\n🛸 รหัสชีวภาพถูกลบพ้นวงโคจรอย่างถาวร`, { parse_mode: 'HTML' });
         setTimeout(() => { bot.deleteMessage(targetGroupId, m.message_id).catch(() => {}); }, 60000);
 
-        // ย้ายคำสั่งส่ง Log ออกมารองรับอิสระและแนบเวลาประเทศไทยเป๊ะๆ
         await sendSystemLog(`📜 <b>[ EXECUTION BAN LOG ]</b>\nเซกเตอร์: ${groupName}\nเป้าหมาย: ${targetName} (🆔 <code>${targetUserId}</code>)\nผู้สั่งการโจมตี: เจ้าหน้าที่ยานแม่\nข้อหา: ${reason}\n📅 เวลา (ไทย): <code>${getThailandTimestamp()}</code>`);
         
         bot.editMessageText(`✅ <b>สลายตัวตนเป้าหมายสำเร็จ (Ban)</b>\n\n<i>🛰️ กำลังคืนค่าหน้าจอหลัก...</i>`, { chat_id: chatId, message_id: messageId, parse_mode: 'HTML' }).catch(()=>{});
@@ -738,7 +791,6 @@ bot.on('message', async (msg) => {
         const m = await bot.sendMessage(targetGroupId, `🟢 <b>[ REANIMATE COMPLETE - UNBAN ]</b>\n👤 <b>เป้าหมาย:</b> <b>${targetName}</b> (🆔 <code>${targetUserId}</code>)\n🔓 อนุญาตให้ฟื้นคืนมวลสารกลับเข้าสู่พื้นที่`, { parse_mode: 'HTML' });
         setTimeout(() => { bot.deleteMessage(targetGroupId, m.message_id).catch(() => {}); }, 60000);
 
-        // ย้ายคำสั่งส่ง Log ออกมารองรับอิสระและแนบเวลาประเทศไทยเป๊ะๆ
         await sendSystemLog(`📜 <b>[ UNBAN LOG ]</b>\nเซกเตอร์: ${groupName}\nคืนชีพเป้าหมาย: ${targetName} (🆔 <code>${targetUserId}</code>)\nหมายเหตุ: ${reason}\n📅 เวลา (ไทย): <code>${getThailandTimestamp()}</code>`);
         
         bot.editMessageText(`✅ <b>ฟื้นคืนเนื้อเยื่อสำเร็จ (Unban)</b>\n\n<i>🛰️ กำลังคืนค่าหน้าจอหลัก...</i>`, { chat_id: chatId, message_id: messageId, parse_mode: 'HTML' }).catch(()=>{});
@@ -750,5 +802,5 @@ bot.on('message', async (msg) => {
   }
 });
 
-// 🌐 เปิดระบบรับสัญญาณพอร์ตเว็บเซิร์ฟเวอร์หลอกล่อเพื่อป้องกันไม่ให้ Render สั่ง Sleep บอท
+// 🌐 เปิดระบบรับสัญญาณพอร์ตเว็บเซิร์ฟเวอร์
 http.createServer((req, res) => res.end('ALIEN_STATION_ONLINE')).listen(process.env.PORT || 3000);
