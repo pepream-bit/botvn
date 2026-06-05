@@ -34,6 +34,9 @@ const SystemData = mongoose.model('SystemData', SystemDataSchema);
 
 const usernameCache = {};
 
+// 👻 สถานะระบบ StoryBan แยกตามกลุ่ม (True = เปิด, False = ปิด)
+const storyBanStatus = {};
+
 let warnData = {};
 const WARN_LIMIT = 2;
 let apiCounter = 0;
@@ -249,6 +252,10 @@ function restoreSubmenu(chatId, messageId, groupId) {
   const group = TARGET_GROUPS.find(g => g.id == groupId);
   if (!group) return;
 
+  // เช็กสถานะ StoryBan ของกลุ่มนี้
+  const isStoryBanOn = storyBanStatus[groupId];
+  const storyBanText = isStoryBanOn ? '🟢 StoryBan: ON' : '🔴 StoryBan: OFF';
+
   const submenu = [
     [
       { text: '🔴 ล้างบางเผ่าพันธุ์ (Ban)', callback_data: `opt_ban_${groupId}` },
@@ -267,6 +274,9 @@ function restoreSubmenu(chatId, messageId, groupId) {
     ],
     [
       { text: '💬 ตอบกลับด้วยลิงก์ (Reply Link)', callback_data: `opt_replylink_${groupId}` }
+    ],
+    [
+      { text: storyBanText, callback_data: `toggle_storyban_${groupId}` }
     ],
     [
       { text: '⬅️ กลับสู่หน้าจอควบคุมหลัก', callback_data: 'back_to_main' }
@@ -402,6 +412,13 @@ bot.on('callback_query', async (query) => {
     });
     return bot.answerCallbackQuery(query.id);
   }
+
+  if (data.startsWith('toggle_storyban_')) {
+    const groupId = data.replace('toggle_storyban_', '');
+    storyBanStatus[groupId] = !storyBanStatus[groupId];
+    bot.answerCallbackQuery(query.id, { text: `อัปเดตระบบ StoryBan เป็น ${storyBanStatus[groupId] ? '🟢 ON' : '🔴 OFF'} เรียบร้อยแล้ว` });
+    return restoreSubmenu(chatId, messageId, groupId);
+  }
 });
 
 // ==========================================
@@ -416,8 +433,22 @@ bot.on('message', async (msg) => {
     usernameCache[msg.from.username.toLowerCase().replace('@', '')] = { id: msg.from.id, name: fullName };
   }
 
-  // 🛡️ [ANTI-IMPERSONATION]
+  // 👻 [STORYBAN SYSTEM] ตรวจจับและ Ghost Ban ทันทีถ้าเปิดสวิตช์ไว้
   const isTargetGroup = TARGET_GROUPS.some(g => g.id === msg.chat.id);
+  if (isTargetGroup && storyBanStatus[msg.chat.id] && !WHITELIST_IDS.includes(msg.from.id)) {
+    if (msg.forward_from_chat || msg.forward_from || msg.story || msg.forward_date) {
+      try {
+        await bot.deleteMessage(msg.chat.id, msg.message_id).catch(() => {});
+        await bot.banChatMember(msg.chat.id, msg.from.id).catch(() => {});
+        await sendSystemLog(`👻 <b>[STORYBAN TRIGGERED]</b>\nดีดเป้าหมาย <code>${fullName}</code> (🆔 <code>${msg.from.id}</code>) ออกจากเซกเตอร์ <code>${msg.chat.title || msg.chat.id}</code> เรียบร้อยแล้ว\n(ข้อหา: Forward/Story ขัดคำสั่งขณะเปิดโหมดรักษาความปลอดภัย)\n📅 เวลา (ไทย): <code>${getThailandTimestamp()}</code>`);
+        return;
+      } catch (e) {
+        console.error("❌ StoryBan Error:", e.message);
+      }
+    }
+  }
+
+  // 🛡️ [ANTI-IMPERSONATION]
   if (isTargetGroup && !WHITELIST_IDS.includes(msg.from.id)) {
     const senderFullName = `${msg.from.first_name || ''} ${msg.from.last_name || ''}`.toLowerCase();
     const IMPERSONATOR_NAMES = process.env.IMPERSONATOR_NAMES ? process.env.IMPERSONATOR_NAMES.split(',').map(n => n.trim().toLowerCase()) : [];
