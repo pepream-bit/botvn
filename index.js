@@ -43,14 +43,7 @@ const GlobalConfigSchema = new mongoose.Schema({
 });
 const GlobalConfig = mongoose.model('GlobalConfig', GlobalConfigSchema);
 
-// 2. สถิติ API รายวัน (รีเซตอัตโนมัติเที่ยงคืนไทย)
-const DailySystemStatsSchema = new mongoose.Schema({
-  date: String,
-  apiUsageCount: { type: Number, default: 0 }
-});
-const DailySystemStats = mongoose.model('DailySystemStats', DailySystemStatsSchema);
-
-// 3. การตั้งค่าและข้อมูลของแต่ละเซกเตอร์ (ถาวร)
+// 2. การตั้งค่าและข้อมูลของแต่ละเซกเตอร์ (ถาวร)
 const SectorConfigSchema = new mongoose.Schema({
   groupId: String,
   warnRecords: { type: Object, default: {} },         // { "userId": count }
@@ -72,28 +65,12 @@ const sectorCache = {};     // { groupId: SectorConfig doc }
 const monitorSessions = new Map();
 
 const WARN_LIMIT = 2;
-const API_DAILY_MAX = 50000;
-let apiCounter = 0;
 
 // ==========================================
 // 🇹🇭 ระบบเวลาไทย
 // ==========================================
-function getTodayDate() {
-  return new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'Asia/Bangkok', year: 'numeric', month: '2-digit', day: '2-digit'
-  }).format(new Date());
-}
-
 function getThailandTimestamp() {
   return new Date().toLocaleString('th-TH', { timeZone: 'Asia/Bangkok' });
-}
-
-function getMsUntilThailandMidnight() {
-  const now = new Date();
-  const bangkokTime = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Bangkok' }));
-  const bangkokMidnight = new Date(bangkokTime);
-  bangkokMidnight.setHours(24, 0, 0, 0);
-  return bangkokMidnight - bangkokTime;
 }
 
 // ==========================================
@@ -111,15 +88,6 @@ async function loadDatabase() {
       console.log(`👥 สร้าง Whitelist ใหม่จาก .env: ${initialIds.join(', ')}`);
     }
     globalWhitelist = gConfig.whitelistIds;
-
-    // โหลด API Counter รายวัน
-    let todayStats = await DailySystemStats.findOne({ date: getTodayDate() });
-    if (todayStats) {
-      apiCounter = todayStats.apiUsageCount;
-    } else {
-      apiCounter = 0;
-      await DailySystemStats.create({ date: getTodayDate(), apiUsageCount: 0 });
-    }
 
     // โหลดค่าของแต่ละกลุ่ม
     for (const group of TARGET_GROUPS) {
@@ -152,18 +120,6 @@ async function saveGlobalConfig() {
   }
 }
 
-async function saveApiCount() {
-  try {
-    await DailySystemStats.findOneAndUpdate(
-      { date: getTodayDate() },
-      { apiUsageCount: apiCounter },
-      { upsert: true }
-    );
-  } catch (e) {
-    console.error('❌ บันทึก API count ล้มเหลว:', e.message);
-  }
-}
-
 async function saveSectorData(groupId) {
   try {
     if (sectorCache[groupId]) {
@@ -181,16 +137,6 @@ async function saveSectorData(groupId) {
   } catch (e) {
     console.error('❌ บันทึก Sector data ล้มเหลว:', e.message);
   }
-}
-
-// รีเซต API counter ทุกเที่ยงคืนไทย
-function scheduleMidnightReset() {
-  setTimeout(async () => {
-    apiCounter = 0;
-    await saveApiCount();
-    console.log(`🔄 รีเซต API counter รายวัน (${getTodayDate()})`);
-    scheduleMidnightReset();
-  }, getMsUntilThailandMidnight());
 }
 
 // ==========================================
@@ -247,7 +193,6 @@ async function resolveName(userId, groupId) {
     if (usernameCache[key].id === userId) return usernameCache[key].name;
   }
   try {
-    apiCounter++;
     const member = await bot.getChatMember(groupId, userId);
     const u = member.user;
     const name = `${u.first_name || ''} ${u.last_name || ''}`.trim() || u.username || `ID:${userId}`;
@@ -273,7 +218,6 @@ mongoose.connect(mongoUri)
   .then(() => {
     console.log('💽 Nebula Database Connected!');
     loadDatabase();
-    scheduleMidnightReset();
   })
   .catch(err => { console.error('❌ DB Error:', err.message); process.exit(1); });
 
@@ -291,7 +235,6 @@ bot.on('polling_error', (err) => {
 async function sendSystemLog(message) {
   if (!LOG_CHANNEL_ID) return;
   try {
-    apiCounter++;
     await bot.sendMessage(LOG_CHANNEL_ID, message, { parse_mode: 'HTML' });
   } catch (err) {
     console.error('❌ ส่ง Log ล้มเหลว:', err.message);
@@ -305,10 +248,7 @@ function sendMainMenu(chatId) {
   const keyboard = TARGET_GROUPS.map(g => [
     { text: `🛰️ เซกเตอร์: ${g.name}`, callback_data: `select_group_${g.id}` }
   ]);
-  keyboard.push([
-    { text: `📊 ตรวจสอบโควตา API`, callback_data: `view_api_limits` },
-    { text: `👥 จัดการ Whitelist`, callback_data: `menu_whitelist` }
-  ]);
+  keyboard.push([{ text: `👥 จัดการ Whitelist`, callback_data: `menu_whitelist` }]);
   keyboard.push([{ text: `❌ ปิดแผงควบคุม`, callback_data: `close_main_menu` }]);
   bot.sendMessage(chatId, '🛸 <b>แผงควบคุมหลัก (Alien Command)</b>\nโปรดเลือกพิกัดเซกเตอร์:', {
     parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard }
@@ -468,18 +408,6 @@ bot.on('callback_query', async (query) => {
   if (data.startsWith('menu_namefilter_')) return sendNameFilterMenu(chatId, data.replace('menu_namefilter_', ''));
   if (data.startsWith('menu_comms_')) return sendCommsMenu(chatId, data.replace('menu_comms_', ''));
   if (data.startsWith('menu_set_')) return sendSettingsMenu(chatId, data.replace('menu_set_', ''));
-
-  // ── โควตา API ──
-  if (data === 'view_api_limits') {
-    const pct = Math.min(100, Math.round((apiCounter / API_DAILY_MAX) * 100));
-    const bars = Math.round(pct / 10);
-    const barStr = '🟩'.repeat(bars) + '⬜'.repeat(10 - bars);
-    return bot.sendMessage(chatId,
-      `📊 <b>เครื่องตรวจวัดขีดจำกัดสัญญาณ API รายวัน</b>\n\nแถบพลังงาน: [<code>${barStr}</code>] ${pct}%\nเรียกใช้งานไปแล้ว: <code>${apiCounter}</code> / <code>${API_DAILY_MAX}</code> ครั้ง\n\n⚠️ <i>ข้อมูลบันทึกถาวรผ่านระบบคลาวด์ ไม่สูญหายเมื่อรีสตาร์ท</i>`, {
-      parse_mode: 'HTML',
-      reply_markup: { inline_keyboard: [[{ text: '⬅️ กลับสู่แผงควบคุมหลัก', callback_data: 'back_to_main' }]] }
-    });
-  }
 
   // ── Toggle Switches ──
   if (data.startsWith('toggle_storyban_')) {
@@ -668,8 +596,6 @@ bot.on('message', async (msg) => {
 
     // ── Comms ──
     case 'ann': {
-      apiCounter++;
-      await saveApiCount();
       try {
         const copiedMsg = await bot.copyMessage(targetGroupId, msg.chat.id, msg.message_id);
         bot.deleteMessage(msg.chat.id, msg.message_id).catch(() => {});
@@ -687,8 +613,6 @@ bot.on('message', async (msg) => {
     }
 
     case 'capture': {
-      apiCounter++;
-      await saveApiCount();
       const loadingMsg = await bot.sendMessage(chatId, `⏳ <b>[STEALTH CAPTURE]</b> กำลังดึงสื่อ...`, { parse_mode: 'HTML' });
       try {
         let tChatId, mId;
@@ -703,7 +627,6 @@ bot.on('message', async (msg) => {
         }
         if (!tChatId || isNaN(mId)) throw new Error('รูปแบบลิงก์ไม่ถูกต้อง');
 
-        apiCounter++;
         await bot.copyMessage(msg.from.id, tChatId, mId);
         bot.deleteMessage(chatId, loadingMsg.message_id).catch(() => {});
         bot.sendMessage(chatId, `🛸 <b>ดึงสื่อสำเร็จ!</b> ส่งตรงไปยังกล่องข้อความของคุณแล้ว`, {
@@ -721,8 +644,6 @@ bot.on('message', async (msg) => {
     }
 
     case 'replylink': {
-      apiCounter++;
-      await saveApiCount();
       try {
         spaceIdx = inputStr.indexOf(' ');
         if (spaceIdx === -1) throw new Error('โปรดใส่ข้อความตอบกลับหลังลิงก์ เว้นวรรคคั่น');
@@ -737,7 +658,6 @@ bot.on('message', async (msg) => {
         }
         if (!tChatId || isNaN(mId)) throw new Error('ลิงก์ข้อความไม่สมบูรณ์');
 
-        apiCounter++;
         const sentMsg = await bot.sendMessage(targetGroupId, replyText, { reply_to_message_id: mId });
         if (delTime > 0) setTimeout(() => { bot.deleteMessage(targetGroupId, sentMsg.message_id).catch(() => {}); }, delTime);
 
@@ -780,7 +700,6 @@ bot.on('message', async (msg) => {
         const warnBar = buildWarnBar(currentWarn, WARN_LIMIT);
 
         if (currentWarn >= WARN_LIMIT) {
-          apiCounter++;
           await bot.banChatMember(targetGroupId, targetUserId);
           clearWarn(targetGroupId, targetUserId);
           await saveSectorData(groupId);
@@ -794,7 +713,6 @@ bot.on('message', async (msg) => {
           await sendSystemLog(`📜 <b>[ AUTO-BAN LOG ]</b>\nเซกเตอร์: ${groupName}\nเป้าหมาย: ${targetName} (🆔 <code>${targetUserId}</code>)\nสาเหตุ: ${reason}\n📅 เวลา: <code>${getThailandTimestamp()}</code>`);
           bot.sendMessage(chatId, `☢️ <b>Warn ครบเกณฑ์ — AUTO-BAN สำเร็จ!</b>`, { parse_mode: 'HTML', reply_markup: finishMenu });
         } else {
-          apiCounter++;
           const rem = WARN_LIMIT - currentWarn;
           const m = await bot.sendMessage(targetGroupId,
             `☢️ <b>[ BIOHAZARD WARNING ]</b>\n👤 <a href="tg://user?id=${targetUserId}">${targetName}</a>\n☢️ รังสีสะสม: [${warnBar}] ${currentWarn}/${WARN_LIMIT}\n⚠️ เหตุผล: <code>${reason}</code>\n🚨 อีก <b>${rem} ครั้ง</b> จะถูก AUTO-BAN`,
@@ -832,7 +750,6 @@ bot.on('message', async (msg) => {
         await saveSectorData(groupId);
         const unwarnBar = buildWarnBar(currentWarn, WARN_LIMIT);
 
-        apiCounter++;
         const m = await bot.sendMessage(targetGroupId,
           `🧬 <b>[ DETOXIFICATION COMPLETE ]</b>\n👤 <a href="tg://user?id=${targetUserId}">${targetName}</a>\n☢️ รังสีคงเหลือ: [${unwarnBar}] ${currentWarn}/${WARN_LIMIT}\n💉 บันทึก: <code>${reason}</code>`,
           { parse_mode: 'HTML' }
@@ -880,7 +797,6 @@ bot.on('message', async (msg) => {
       targetName = resolved.name || await resolveName(targetUserId, targetGroupId);
 
       try {
-        apiCounter++;
         await bot.banChatMember(targetGroupId, targetUserId);
         clearWarn(targetGroupId, targetUserId);
         await saveSectorData(groupId);
@@ -910,7 +826,6 @@ bot.on('message', async (msg) => {
       targetName = resolved.name || await resolveName(targetUserId, targetGroupId);
 
       try {
-        apiCounter++;
         await bot.unbanChatMember(targetGroupId, targetUserId, { only_if_banned: true });
 
         const m = await bot.sendMessage(targetGroupId,
