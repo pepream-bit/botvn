@@ -11,24 +11,8 @@ const LOG_CHANNEL_ID = process.env.LOG_CHANNEL_ID
   ? (isNaN(process.env.LOG_CHANNEL_ID) ? process.env.LOG_CHANNEL_ID.trim() : parseInt(process.env.LOG_CHANNEL_ID.trim()))
   : null;
 
-const TARGET_GROUPS = [];
-if (process.env.TARGET_GROUPS) {
-  process.env.TARGET_GROUPS.split(',').forEach(item => {
-    const parts = item.split(':');
-    if (parts.length >= 2) TARGET_GROUPS.push({ id: parseInt(parts[0].trim()), name: parts.slice(1).join(':').trim() });
-  });
-}
-
-if (!token || !mongoUri) {
-  console.error('❌ CRITICAL ERROR: Environment Variables missing (BOT_TOKEN หรือ MONGODB_URI)!');
-  process.exit(1);
-}
-if (!LOG_CHANNEL_ID) {
-  console.error('❌ CRITICAL ERROR: LOG_CHANNEL_ID ไม่ถูกต้อง!');
-  process.exit(1);
-}
-if (TARGET_GROUPS.length === 0) {
-  console.error('❌ CRITICAL ERROR: TARGET_GROUPS ไม่ถูกต้อง!');
+if (!token || !mongoUri || !LOG_CHANNEL_ID) {
+  console.error('❌ CRITICAL ERROR: Environment Variables missing (BOT_TOKEN, MONGODB_URI, หรือ LOG_CHANNEL_ID)!');
   process.exit(1);
 }
 
@@ -36,10 +20,11 @@ if (TARGET_GROUPS.length === 0) {
 // 💽 โครงสร้างฐานข้อมูล MongoDB
 // ==========================================
 
-// 1. การตั้งค่าระดับโลก (Whitelist จัดการได้ผ่าน DB)
+// 1. การตั้งค่าระดับโลก (Whitelist + Target Groups จัดการได้ผ่าน DB)
 const GlobalConfigSchema = new mongoose.Schema({
   configId: { type: String, default: 'main' },
-  whitelistIds: { type: [Number], default: [] }
+  whitelistIds: { type: [Number], default: [] },
+  targetGroups: { type: [{ id: Number, name: String }], default: [] }
 });
 const GlobalConfig = mongoose.model('GlobalConfig', GlobalConfigSchema);
 
@@ -60,6 +45,7 @@ const SectorConfig = mongoose.model('SectorConfig', SectorConfigSchema);
 // 🌌 หน่วยความจำชั่วคราว (Cache & Session)
 // ==========================================
 let globalWhitelist = [];
+let TARGET_GROUPS = [];
 const usernameCache = {};   // { "username_lower": { id, name } }
 const sectorCache = {};     // { groupId: SectorConfig doc }
 const monitorSessions = new Map();
@@ -78,16 +64,29 @@ function getThailandTimestamp() {
 // ==========================================
 async function loadDatabase() {
   try {
-    // โหลด Whitelist จาก DB (ใช้ .env เป็นค่าตั้งต้นถ้ายังไม่มี)
+    // โหลด Whitelist + Target Groups จาก DB (ใช้ .env เป็นค่าตั้งต้นถ้ายังไม่มี)
     let gConfig = await GlobalConfig.findOne({ configId: 'main' });
     if (!gConfig) {
       const initialIds = process.env.WHITELIST_IDS
         ? process.env.WHITELIST_IDS.split(',').map(id => parseInt(id.trim())).filter(n => !isNaN(n))
         : [];
-      gConfig = await GlobalConfig.create({ configId: 'main', whitelistIds: initialIds });
+      const initialGroups = [];
+      if (process.env.TARGET_GROUPS) {
+        process.env.TARGET_GROUPS.split(',').forEach(item => {
+          const parts = item.split(':');
+          if (parts.length >= 2) initialGroups.push({ id: parseInt(parts[0].trim()), name: parts.slice(1).join(':').trim() });
+        });
+      }
+      gConfig = await GlobalConfig.create({ 
+        configId: 'main', 
+        whitelistIds: initialIds,
+        targetGroups: initialGroups 
+      });
       console.log(`👥 สร้าง Whitelist ใหม่จาก .env: ${initialIds.join(', ')}`);
+      console.log(`🛰️ สร้าง Target Groups ใหม่จาก .env: ${initialGroups.map(g => g.name).join(', ')}`);
     }
     globalWhitelist = gConfig.whitelistIds;
+    TARGET_GROUPS = gConfig.targetGroups || [];
 
     // โหลดค่าของแต่ละกลุ่ม
     for (const group of TARGET_GROUPS) {
@@ -112,7 +111,7 @@ async function saveGlobalConfig() {
   try {
     await GlobalConfig.findOneAndUpdate(
       { configId: 'main' },
-      { whitelistIds: globalWhitelist },
+      { whitelistIds: globalWhitelist, targetGroups: TARGET_GROUPS },
       { upsert: true }
     );
   } catch (e) {
@@ -248,10 +247,29 @@ function sendMainMenu(chatId) {
   const keyboard = TARGET_GROUPS.map(g => [
     { text: `🛰️ เซกเตอร์: ${g.name}`, callback_data: `select_group_${g.id}` }
   ]);
-  keyboard.push([{ text: `👥 จัดการ Whitelist`, callback_data: `menu_whitelist` }]);
+  keyboard.push([
+    { text: `🛰️ จัดการเซกเตอร์`, callback_data: `menu_sectors` },
+    { text: `👥 จัดการ Whitelist`, callback_data: `menu_whitelist` }
+  ]);
   keyboard.push([{ text: `❌ ปิดแผงควบคุม`, callback_data: `close_main_menu` }]);
   bot.sendMessage(chatId, '🛸 <b>แผงควบคุมหลัก (Alien Command)</b>\nโปรดเลือกพิกัดเซกเตอร์:', {
     parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard }
+  });
+}
+
+function sendSectorsMenu(chatId) {
+  const secText = TARGET_GROUPS.length > 0
+    ? TARGET_GROUPS.map((g, i) => `${i + 1}. <code>${g.name}</code>\n    └ ID: <code>${g.id}</code>`).join('\n')
+    : '<i>ไม่มีข้อมูลเซกเตอร์</i>';
+  const submenu = [
+    [
+      { text: '➕ เพิ่มเซกเตอร์', callback_data: `opt_addsector_global` },
+      { text: '➖ ลบเซกเตอร์', callback_data: `opt_delsector_global` }
+    ],
+    [{ text: '⬅️ กลับหน้าจอหลัก', callback_data: 'back_to_main' }]
+  ];
+  bot.sendMessage(chatId, `🛰️ <b>ระบบจัดการเซกเตอร์เป้าหมาย</b>\n\n<b>รายชื่อเซกเตอร์ที่เชื่อมต่อ:</b>\n${secText}`, {
+    parse_mode: 'HTML', reply_markup: { inline_keyboard: submenu }
   });
 }
 
@@ -402,6 +420,7 @@ bot.on('callback_query', async (query) => {
   // ── Navigation ──
   if (data === 'back_to_main') return sendMainMenu(chatId);
   if (data === 'close_main_menu') return;
+  if (data === 'menu_sectors') return sendSectorsMenu(chatId);
   if (data === 'menu_whitelist') return sendWhitelistMenu(chatId);
   if (data.startsWith('select_group_')) return sendGroupMenu(chatId, data.replace('select_group_', ''));
   if (data.startsWith('menu_sec_')) return sendSecurityMenu(chatId, data.replace('menu_sec_', ''));
@@ -437,9 +456,9 @@ bot.on('callback_query', async (query) => {
   if (data.startsWith('opt_')) {
     let action, groupId;
 
-    // Whitelist actions มี format ต่างออกไป: opt_addwl_global / opt_delwl_global
-    if (data === 'opt_addwl_global' || data === 'opt_delwl_global') {
-      action = data === 'opt_addwl_global' ? 'addwl' : 'delwl';
+    // Global actions: opt_addwl_global, opt_delwl_global, opt_addsector_global, opt_delsector_global
+    if (data.includes('_global')) {
+      action = data.replace('opt_', '').replace('_global', '');
       groupId = 'global';
     } else {
       const parts = data.split('_');
@@ -447,7 +466,11 @@ bot.on('callback_query', async (query) => {
       groupId = parts[2];
     }
 
-    const backTarget = groupId === 'global' ? 'menu_whitelist' : `select_group_${groupId}`;
+    // กำหนด back callback ตามประเภท action
+    let backTarget = `select_group_${groupId}`;
+    if (action.includes('wl')) backTarget = 'menu_whitelist';
+    if (action.includes('sector')) backTarget = 'menu_sectors';
+
     const cancelMenu = { inline_keyboard: [[{ text: '❌ ยกเลิกและกลับ', callback_data: backTarget }]] };
 
     let promptMsg = `⌨️ <b>รอรับข้อมูลคำสั่ง [${action.toUpperCase()}]</b>\nโปรดพิมพ์ส่งเข้ามาที่แชทนี้...`;
@@ -464,6 +487,8 @@ bot.on('callback_query', async (query) => {
     if (action === 'delname')   promptMsg = `➖ <b>[ลบชื่อเฝ้าระวัง]</b>\nพิมพ์ชื่อหรือคำที่ต้องการลบออก (ต้องตรงกับในระบบ):`;
     if (action === 'addwl')     promptMsg = `➕ <b>[เพิ่ม Admin]</b>\nพิมพ์ <b>ID ตัวเลข</b> ของผู้ที่ต้องการตั้งเป็น Admin:`;
     if (action === 'delwl')     promptMsg = `➖ <b>[ลบ Admin]</b>\nพิมพ์ <b>ID ตัวเลข</b> ของผู้ที่ต้องการปลดจาก Admin:`;
+    if (action === 'addsector') promptMsg = `➕ <b>[เพิ่มเซกเตอร์]</b>\nพิมพ์ <b>ข้อมูลเซกเตอร์</b> (รูปแบบ: <code>IDกลุ่ม:ชื่อกลุ่ม</code>)\nตัวอย่าง: <code>-10012345678:ดาวอังคาร</code>`;
+    if (action === 'delsector') promptMsg = `➖ <b>[ลบเซกเตอร์]</b>\nพิมพ์ <b>ID ตัวเลข</b> ของเซกเตอร์ที่ต้องการลบ\n(เช่น: <code>-10012345678</code>):`;
 
     bot.sendMessage(chatId, promptMsg, { parse_mode: 'HTML', reply_markup: cancelMenu })
       .then(sentMsg => {
@@ -539,10 +564,53 @@ bot.on('message', async (msg) => {
 
   const finishMenu = { inline_keyboard: [[{ text: '⬅️ กลับสู่เมนูเซกเตอร์', callback_data: `select_group_${groupId}` }]] };
   const finishMenuWL = { inline_keyboard: [[{ text: '⬅️ กลับสู่ Whitelist', callback_data: `menu_whitelist` }]] };
+  const finishMenuSectors = { inline_keyboard: [[{ text: '⬅️ กลับสู่จัดการเซกเตอร์', callback_data: `menu_sectors` }]] };
 
   let targetInput, reason, spaceIdx, resolved, targetUserId, targetName;
 
   switch (action) {
+
+    // ── Sector Management ──
+    case 'addsector': {
+      const parts = inputStr.split(':');
+      if (parts.length < 2) {
+        bot.sendMessage(chatId, `❌ รูปแบบไม่ถูกต้อง ต้องใช้ ID:ชื่อกลุ่ม`, { parse_mode: 'HTML', reply_markup: finishMenuSectors });
+        break;
+      }
+      const sectorId = parseInt(parts[0].trim());
+      const sectorName = parts.slice(1).join(':').trim();
+      if (isNaN(sectorId)) {
+        bot.sendMessage(chatId, `❌ ID กลุ่มต้องเป็นตัวเลข`, { parse_mode: 'HTML', reply_markup: finishMenuSectors });
+        break;
+      }
+      if (TARGET_GROUPS.some(g => g.id === sectorId)) {
+        bot.sendMessage(chatId, `❌ มีเซกเตอร์ ID นี้อยู่ในระบบแล้ว`, { parse_mode: 'HTML', reply_markup: finishMenuSectors });
+        break;
+      }
+      TARGET_GROUPS.push({ id: sectorId, name: sectorName });
+      await saveGlobalConfig();
+      let config = await SectorConfig.findOne({ groupId: sectorId.toString() });
+      if (!config) {
+        config = await SectorConfig.create({ groupId: sectorId.toString(), impersonatorNames: [], settings: {} });
+      }
+      sectorCache[sectorId] = config;
+      bot.sendMessage(chatId, `✅ เพิ่มเซกเตอร์ <b>${sectorName}</b> สำเร็จ!`, { parse_mode: 'HTML', reply_markup: finishMenuSectors });
+      await sendSystemLog(`🛰️ <b>[ADD SECTOR]</b>\nเซกเตอร์: ${sectorName} (ID: <code>${sectorId}</code>)\nโดย: ${fullName} (<code>${msg.from.id}</code>)\n📅 เวลา: <code>${getThailandTimestamp()}</code>`);
+      break;
+    }
+
+    case 'delsector': {
+      const sectorId = parseInt(inputStr);
+      if (isNaN(sectorId)) {
+        bot.sendMessage(chatId, `❌ ID กลุ่มต้องเป็นตัวเลข`, { parse_mode: 'HTML', reply_markup: finishMenuSectors });
+        break;
+      }
+      TARGET_GROUPS = TARGET_GROUPS.filter(g => g.id !== sectorId);
+      await saveGlobalConfig();
+      bot.sendMessage(chatId, `✅ ลบเซกเตอร์ ID <code>${sectorId}</code> เรียบร้อยแล้ว`, { parse_mode: 'HTML', reply_markup: finishMenuSectors });
+      await sendSystemLog(`🛰️ <b>[DELETE SECTOR]</b>\nลบ ID: <code>${sectorId}</code>\nโดย: ${fullName} (<code>${msg.from.id}</code>)\n📅 เวลา: <code>${getThailandTimestamp()}</code>`);
+      break;
+    }
 
     // ── Whitelist Management ──
     case 'addwl': {
