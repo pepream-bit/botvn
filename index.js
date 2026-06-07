@@ -269,6 +269,10 @@ function sendMainMenu(chatId) {
   const keyboard = TARGET_GROUPS.map(g => [
     { text: `🛰️ เซกเตอร์: ${g.name}`, callback_data: `select_group_${g.id}` }
   ]);
+  keyboard.push([
+    { text: `📊 ตรวจสอบโควตา API`, callback_data: `view_api_limits` },
+    { text: `👥 รายชื่อ Whitelist`, callback_data: `view_whitelist` }
+  ]);
   keyboard.push([{ text: `❌ ปิดแผงควบคุม`, callback_data: `close_main_menu` }]);
   bot.sendMessage(chatId, "🛸 <b>แผงควบคุมหลัก (Alien Command)</b>\nโปรดเลือกพิกัดเซกเตอร์:", {
     parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard }
@@ -405,6 +409,35 @@ bot.on('callback_query', async (query) => {
     return sendGroupMenu(chatId, data.replace('select_group_', ''));
   }
 
+  // ── โควตา API ──
+  if (data === 'view_api_limits') {
+    const pct = Math.min(100, Math.round((apiCounter / API_DAILY_MAX) * 100));
+    const bars = Math.round(pct / 10);
+    const barStr = '🟩'.repeat(bars) + '⬜'.repeat(10 - bars);
+    return bot.sendMessage(chatId,
+      `📊 <b>เครื่องตรวจวัดขีดจำกัดสัญญาณ API รายวัน</b>\n\nแถบพลังงาน: [<code>${barStr}</code>] ${pct}%\nเรียกใช้งานไปแล้ว: <code>${apiCounter}</code> / <code>${API_DAILY_MAX}</code> ครั้ง\n\n⚠️ <i>ข้อมูลบันทึกถาวรผ่านระบบคลาวด์ ไม่สูญหายเมื่อรีสตาร์ท</i>`, {
+      parse_mode: 'HTML',
+      reply_markup: { inline_keyboard: [[{ text: '⬅️ กลับสู่แผงควบคุมหลัก', callback_data: 'back_to_main' }]] }
+    });
+  }
+
+  // ── Whitelist ──
+  if (data === 'view_whitelist') {
+    let listMsg = `👥 <b>รายชื่อโอเปอเรเตอร์ผู้ควบคุมระบบ (Whitelist)</b>\n━━━━━━━━━━━━━━━━━━━━\n`;
+    WHITELIST_IDS.forEach((id, idx) => {
+      let name = 'ผู้ใช้นิรนาม';
+      for (const key in usernameCache) {
+        if (usernameCache[key].id === id) { name = usernameCache[key].name; break; }
+      }
+      listMsg += `${idx + 1}. 🆔 <code>${id}</code> [${name}]\n`;
+    });
+    listMsg += `━━━━━━━━━━━━━━━━━━━━`;
+    return bot.sendMessage(chatId, listMsg, {
+      parse_mode: 'HTML',
+      reply_markup: { inline_keyboard: [[{ text: '⬅️ กลับสู่แผงควบคุมหลัก', callback_data: 'back_to_main' }]] }
+    });
+  }
+
   // ── เมนูหมวดหมู่ ──
   if (data.startsWith('menu_sec_')) return sendSecurityMenu(chatId, data.replace('menu_sec_', ''));
   if (data.startsWith('menu_namefilter_')) return sendNameFilterMenu(chatId, data.replace('menu_namefilter_', ''));
@@ -445,8 +478,6 @@ bot.on('callback_query', async (query) => {
     const action = parts[1];
     const groupId = parts[2];
 
-    monitorSessions.set(query.from.id, { chatId, groupId, action });
-
     const cancelMenu = { inline_keyboard: [[{ text: '❌ ยกเลิกและกลับ', callback_data: `select_group_${groupId}` }]] };
     let promptMsg = `⌨️ <b>รอรับข้อมูลคำสั่ง [${action.toUpperCase()}]</b>\nโปรดพิมพ์ส่งเข้ามาที่แชทนี้...`;
 
@@ -462,7 +493,15 @@ bot.on('callback_query', async (query) => {
     else if (action === 'addname') promptMsg = `➕ <b>[เพิ่มชื่อเฝ้าระวัง]</b>\nพิมพ์ชื่อหรือคำที่ต้องการเพิ่ม (เช่น <code>THEWORLD V2</code>):`;
     else if (action === 'delname') promptMsg = `➖ <b>[ลบชื่อเฝ้าระวัง]</b>\nพิมพ์ชื่อหรือคำที่ต้องการลบออก (ต้องตรงกับในระบบ):`;
 
-    bot.sendMessage(chatId, promptMsg, { parse_mode: 'HTML', reply_markup: cancelMenu });
+    bot.sendMessage(chatId, promptMsg, { parse_mode: 'HTML', reply_markup: cancelMenu })
+      .then((sentMsg) => {
+        monitorSessions.set(query.from.id, {
+          chatId,
+          groupId,
+          action,
+          promptMsgId: sentMsg.message_id
+        });
+      });
   }
 });
 
@@ -518,7 +557,7 @@ bot.on('message', async (msg) => {
   const session = monitorSessions.get(msg.from.id);
   if (!session) return;
 
-  const { chatId, groupId, action } = session;
+  const { chatId, groupId, action, promptMsgId } = session;
   const targetGroupId = parseInt(groupId);
   const groupObj = TARGET_GROUPS.find(g => g.id === targetGroupId);
   const groupName = groupObj ? groupObj.name : 'ไม่ระบุกลุ่ม';
@@ -527,6 +566,7 @@ bot.on('message', async (msg) => {
   const inputStr = msg.text ? msg.text.trim() : '';
 
   if (action !== 'ann') bot.deleteMessage(msg.chat.id, msg.message_id).catch(() => {});
+  if (promptMsgId) bot.deleteMessage(chatId, promptMsgId).catch(() => {});
   monitorSessions.delete(msg.from.id);
 
   const finishMenu = { inline_keyboard: [[{ text: '⬅️ กลับสู่เมนูเซกเตอร์', callback_data: `select_group_${groupId}` }]] };
