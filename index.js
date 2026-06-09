@@ -250,6 +250,7 @@ async function sendSystemLog(message, groupId = null) {
   if (groupKey && sectorCache[groupKey]?.settings?.logChannelId) {
     targetChannel = sectorCache[groupKey].settings.logChannelId;
   }
+  console.log(`[sendSystemLog] groupId=${groupKey}, logChannelId=${sectorCache[groupKey]?.settings?.logChannelId ?? 'none'}, → targetChannel=${targetChannel}`);
   if (!targetChannel) return;
   bot.sendMessage(targetChannel, message, { parse_mode: 'HTML' }).catch(() => {});
 }
@@ -682,8 +683,17 @@ bot.on('message', async (msg) => {
         });
         break;
       }
-      sectorCache[groupId].settings.logChannelId = inputStr;
-      await saveSectorData(groupId);
+      const setlogKey = groupId.toString();
+      console.log(`[setlogch] groupId="${setlogKey}", inputStr="${inputStr}"`);
+      console.log(`[setlogch] sectorCache keys:`, Object.keys(sectorCache));
+      if (!sectorCache[setlogKey]) {
+        bot.sendMessage(chatId, `❌ ไม่พบข้อมูลเซกเตอร์ key="${setlogKey}" ในระบบ`, {
+          parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⬅️ กลับ', callback_data: `menu_log_${groupId}` }]] }
+        });
+        break;
+      }
+      sectorCache[setlogKey].settings.logChannelId = inputStr;
+      await saveSectorData(setlogKey);
       bot.sendMessage(chatId, `✅ ตั้งแชนแนลส่ง Log ไปที่ <code>${inputStr}</code> สำเร็จ!`, {
         parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⬅️ กลับ', callback_data: `menu_log_${groupId}` }]] }
       });
