@@ -38,7 +38,8 @@ const SectorConfigSchema = new mongoose.Schema({
     nameFilterActive: { type: Boolean, default: false },
     botMessageDeleteTime: { type: Number, default: 60000 },
     storyBanLogActive: { type: Boolean, default: false },    // เปิด/ปิด Log StoryBan
-    nameFilterLogActive: { type: Boolean, default: false }   // เปิด/ปิด Log NameFilter
+    nameFilterLogActive: { type: Boolean, default: false },  // เปิด/ปิด Log NameFilter
+    logChannelId: { type: String, default: null }            // แชนแนลส่ง Log เฉพาะเซกเตอร์ (null = ใช้แชนแนลกลาง)
   }
 }, { minimize: false });
 const SectorConfig = mongoose.model('SectorConfig', SectorConfigSchema);
@@ -233,13 +234,13 @@ bot.on('polling_error', (err) => {
   }
 });
 
-async function sendSystemLog(message) {
-  if (!LOG_CHANNEL_ID) return;
-  try {
-    await bot.sendMessage(LOG_CHANNEL_ID, message, { parse_mode: 'HTML' });
-  } catch (err) {
-    console.error('❌ ส่ง Log ล้มเหลว:', err.message);
+async function sendSystemLog(message, groupId = null) {
+  let targetChannel = LOG_CHANNEL_ID; // ค่าเริ่มต้นจากแชนแนลกลาง .env
+  if (groupId && sectorCache[groupId]?.settings?.logChannelId) {
+    targetChannel = sectorCache[groupId].settings.logChannelId;
   }
+  if (!targetChannel) return;
+  bot.sendMessage(targetChannel, message, { parse_mode: 'HTML' }).catch(() => {});
 }
 
 // ==========================================
@@ -320,13 +321,20 @@ function sendLogMenu(chatId, groupId) {
   if (!config) return;
   const isStoryLogOn = config.storyBanLogActive || false;
   const isNameLogOn = config.nameFilterLogActive || false;
+  const currentLogCh = config.logChannelId
+    ? `<code>${config.logChannelId}</code>`
+    : '❌ ไม่มี (ใช้แชนแนลกลางจาก .env)';
   const submenu = [
     [{ text: isStoryLogOn ? '👻 Log StoryBan: ON' : '👻 Log StoryBan: OFF', callback_data: `toggle_logstory_${groupId}` }],
     [{ text: isNameLogOn ? '🕵️ Log NameFilter: ON' : '🕵️ Log NameFilter: OFF', callback_data: `toggle_logname_${groupId}` }],
+    [
+      { text: '➕ ตั้งพิกัด Channel', callback_data: `opt_setlogch_${groupId}` },
+      { text: '➖ ลบพิกัด Channel', callback_data: `opt_dellogch_${groupId}` }
+    ],
     [{ text: '⬅️ ย้อนกลับ', callback_data: `select_group_${groupId}` }]
   ];
   bot.sendMessage(chatId,
-    `📜 <b>ตั้งค่าระบบการส่งรายงาน Log ไปยัง Channel</b>\n🛰️ เซกเตอร์: <code>${group?.name}</code>\n\nเลือกประเภท Log ที่ต้องการให้บอทส่งแจ้งเตือน:`, {
+    `📜 <b>ตั้งค่าระบบการส่งรายงาน Log ไปยัง Channel</b>\n🛰️ เซกเตอร์: <code>${group?.name}</code>\n📡 แชนแนลส่ง Log: ${currentLogCh}\n\nเลือกประเภท Log ที่ต้องการให้บอทส่งแจ้งเตือน:`, {
     parse_mode: 'HTML', reply_markup: { inline_keyboard: submenu }
   });
 }
@@ -503,6 +511,7 @@ bot.on('callback_query', async (query) => {
     let backTarget = `select_group_${groupId}`;
     if (action.includes('wl')) backTarget = 'menu_whitelist';
     if (action.includes('sector')) backTarget = 'menu_sectors';
+    if (action.includes('logch')) backTarget = `menu_log_${groupId}`;
 
     const cancelMenu = { inline_keyboard: [[{ text: '❌ ยกเลิกและกลับ', callback_data: backTarget }]] };
 
@@ -522,6 +531,8 @@ bot.on('callback_query', async (query) => {
     if (action === 'delwl')     promptMsg = `➖ <b>[ลบ Admin]</b>\nพิมพ์ <b>ID ตัวเลข</b> ของผู้ที่ต้องการปลดจาก Admin:`;
     if (action === 'addsector') promptMsg = `➕ <b>[เพิ่มเซกเตอร์]</b>\nพิมพ์ <b>ข้อมูลเซกเตอร์</b> (รูปแบบ: <code>IDกลุ่ม:ชื่อกลุ่ม</code>)\nตัวอย่าง: <code>-10012345678:ดาวอังคาร</code>`;
     if (action === 'delsector') promptMsg = `➖ <b>[ลบเซกเตอร์]</b>\nพิมพ์ <b>ID ตัวเลข</b> ของเซกเตอร์ที่ต้องการลบ\n(เช่น: <code>-10012345678</code>):`;
+    if (action === 'setlogch')  promptMsg = `➕ <b>[ตั้งพิกัด Log Channel]</b>\nพิมพ์ <b>ID ตัวเลข</b> ของ Telegram Channel ที่ต้องการรับ Log ของกลุ่มนี้\n(ตัวอย่าง: <code>-100123456789</code>):`;
+    if (action === 'dellogch')  promptMsg = `➖ <b>[ลบพิกัด Log Channel]</b>\nพิมพ์คำว่า <code>ยืนยัน</code> เพื่อลบพิกัด Channel เฉพาะของเซกเตอร์นี้\n(บอทจะกลับไปใช้แชนแนลกลางจาก .env แทน):`;
 
     bot.sendMessage(chatId, promptMsg, { parse_mode: 'HTML', reply_markup: cancelMenu })
       .then(sentMsg => {
@@ -557,7 +568,8 @@ bot.on('message', async (msg) => {
       bot.banChatMember(msg.chat.id, msg.from.id).catch(() => {});
       if (currentSector.settings.storyBanLogActive) {
         await sendSystemLog(
-          `👻 <b>[STORYBAN TRIGGERED]</b>\nเป้าหมาย: <code>${fullName}</code> (🆔 <code>${msg.from.id}</code>)\nเซกเตอร์: <code>${groupInfo?.name || msg.chat.title || msg.chat.id}</code>\n📅 เวลา (ไทย): <code>${getThailandTimestamp()}</code>`
+          `👻 <b>[STORYBAN TRIGGERED]</b>\nเป้าหมาย: <code>${fullName}</code> (🆔 <code>${msg.from.id}</code>)\nเซกเตอร์: <code>${groupInfo?.name || msg.chat.title || msg.chat.id}</code>\n📅 เวลา (ไทย): <code>${getThailandTimestamp()}</code>`,
+          msg.chat.id
         );
       }
       return;
@@ -572,7 +584,8 @@ bot.on('message', async (msg) => {
         bot.banChatMember(msg.chat.id, msg.from.id).catch(() => {});
         if (currentSector.settings.nameFilterLogActive) {
           await sendSystemLog(
-            `🚫 <b>[NAME FILTER BAN]</b>\nเป้าหมาย: <code>${fullName}</code> (🆔 <code>${msg.from.id}</code>)\nเซกเตอร์: <code>${groupInfo?.name || msg.chat.title || msg.chat.id}</code>\n📅 เวลา (ไทย): <code>${getThailandTimestamp()}</code>`
+            `🚫 <b>[NAME FILTER BAN]</b>\nเป้าหมาย: <code>${fullName}</code> (🆔 <code>${msg.from.id}</code>)\nเซกเตอร์: <code>${groupInfo?.name || msg.chat.title || msg.chat.id}</code>\n📅 เวลา (ไทย): <code>${getThailandTimestamp()}</code>`,
+            msg.chat.id
           );
         }
         return;
@@ -647,6 +660,37 @@ bot.on('message', async (msg) => {
       await saveGlobalConfig();
       bot.sendMessage(chatId, `✅ ลบเซกเตอร์ ID <code>${sectorId}</code> เรียบร้อยแล้ว`, { parse_mode: 'HTML', reply_markup: finishMenuSectors });
       await sendSystemLog(`🛰️ <b>[DELETE SECTOR]</b>\nลบ ID: <code>${sectorId}</code>\nโดย: ${fullName} (<code>${msg.from.id}</code>)\n📅 เวลา: <code>${getThailandTimestamp()}</code>`);
+      break;
+    }
+
+    // ── Log Channel Management ──
+    case 'setlogch': {
+      if (!inputStr.startsWith('-100')) {
+        bot.sendMessage(chatId, `❌ รูปแบบ ID ไม่ถูกต้อง (แชนแนล Telegram มักขึ้นต้นด้วย -100)`, {
+          parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⬅️ กลับ', callback_data: `menu_log_${groupId}` }]] }
+        });
+        break;
+      }
+      sectorCache[groupId].settings.logChannelId = inputStr;
+      await saveSectorData(groupId);
+      bot.sendMessage(chatId, `✅ ตั้งแชนแนลส่ง Log ไปที่ <code>${inputStr}</code> สำเร็จ!`, {
+        parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⬅️ กลับ', callback_data: `menu_log_${groupId}` }]] }
+      });
+      break;
+    }
+
+    case 'dellogch': {
+      if (inputStr !== 'ยืนยัน') {
+        bot.sendMessage(chatId, `❌ คุณพิมพ์คำยืนยันไม่ถูกต้อง ระบบยกเลิกคำสั่ง`, {
+          parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⬅️ กลับ', callback_data: `menu_log_${groupId}` }]] }
+        });
+        break;
+      }
+      sectorCache[groupId].settings.logChannelId = null;
+      await saveSectorData(groupId);
+      bot.sendMessage(chatId, `✅ ลบพิกัด Channel เฉพาะกลุ่มแล้ว ระบบจะสลับไปใช้แชนแนลกลางอัตโนมัติ`, {
+        parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⬅️ กลับ', callback_data: `menu_log_${groupId}` }]] }
+      });
       break;
     }
 
