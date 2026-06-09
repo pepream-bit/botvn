@@ -102,7 +102,7 @@ async function loadDatabase() {
           settings: {}
         });
       }
-      sectorCache[group.id] = config;
+      sectorCache[group.id.toString()] = config;
     }
     console.log('📂 โหลดข้อมูลเข้าสู่หน่วยความจำเสร็จสิ้น');
   } catch (e) {
@@ -124,14 +124,22 @@ async function saveGlobalConfig() {
 
 async function saveSectorData(groupId) {
   try {
-    if (sectorCache[groupId]) {
-      const data = sectorCache[groupId];
+    const key = groupId.toString();
+    if (sectorCache[key]) {
+      const data = sectorCache[key];
       await SectorConfig.findOneAndUpdate(
-        { groupId: groupId.toString() },
+        { groupId: key },
         {
-          warnRecords: data.warnRecords,
-          impersonatorNames: data.impersonatorNames,
-          settings: data.settings
+          $set: {
+            warnRecords: data.warnRecords,
+            impersonatorNames: data.impersonatorNames,
+            'settings.storyBanActive': data.settings.storyBanActive,
+            'settings.nameFilterActive': data.settings.nameFilterActive,
+            'settings.botMessageDeleteTime': data.settings.botMessageDeleteTime,
+            'settings.storyBanLogActive': data.settings.storyBanLogActive,
+            'settings.nameFilterLogActive': data.settings.nameFilterLogActive,
+            'settings.logChannelId': data.settings.logChannelId ?? null
+          }
         },
         { upsert: true }
       );
@@ -235,9 +243,10 @@ bot.on('polling_error', (err) => {
 });
 
 async function sendSystemLog(message, groupId = null) {
-  let targetChannel = LOG_CHANNEL_ID; // ค่าเริ่มต้นจากแชนแนลกลาง .env
-  if (groupId && sectorCache[groupId]?.settings?.logChannelId) {
-    targetChannel = sectorCache[groupId].settings.logChannelId;
+  let targetChannel = LOG_CHANNEL_ID;
+  const groupKey = groupId ? groupId.toString() : null;
+  if (groupKey && sectorCache[groupKey]?.settings?.logChannelId) {
+    targetChannel = sectorCache[groupKey].settings.logChannelId;
   }
   if (!targetChannel) return;
   bot.sendMessage(targetChannel, message, { parse_mode: 'HTML' }).catch(() => {});
@@ -555,7 +564,7 @@ bot.on('message', async (msg) => {
   }
 
   const isTargetGroup = TARGET_GROUPS.some(g => g.id === msg.chat.id);
-  const currentSector = sectorCache[msg.chat.id];
+  const currentSector = sectorCache[msg.chat.id.toString()];
   const groupInfo = TARGET_GROUPS.find(g => g.id === msg.chat.id);
 
   // 🛡️ [AUTO DEFENSE] ทำงานเฉพาะในกลุ่มเป้าหมาย ไม่ใช่ Whitelist
@@ -644,7 +653,7 @@ bot.on('message', async (msg) => {
       if (!config) {
         config = await SectorConfig.create({ groupId: sectorId.toString(), impersonatorNames: [], settings: {} });
       }
-      sectorCache[sectorId] = config;
+      sectorCache[sectorId.toString()] = config;
       bot.sendMessage(chatId, `✅ เพิ่มเซกเตอร์ <b>${sectorName}</b> สำเร็จ!`, { parse_mode: 'HTML', reply_markup: finishMenuSectors });
       await sendSystemLog(`🛰️ <b>[ADD SECTOR]</b>\nเซกเตอร์: ${sectorName} (ID: <code>${sectorId}</code>)\nโดย: ${fullName} (<code>${msg.from.id}</code>)\n📅 เวลา: <code>${getThailandTimestamp()}</code>`);
       break;
