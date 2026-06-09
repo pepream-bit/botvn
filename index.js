@@ -245,14 +245,20 @@ bot.on('polling_error', (err) => {
 });
 
 async function sendSystemLog(message, groupId = null) {
-  let targetChannel = LOG_CHANNEL_ID;
   const groupKey = groupId ? groupId.toString() : null;
-  if (groupKey && sectorCache[groupKey]?.settings?.logChannelId) {
-    targetChannel = sectorCache[groupKey].settings.logChannelId;
+
+  // ถ้าระบุ groupId มา → ใช้แชนแนลของเซกเตอร์นั้นเท่านั้น ไม่ fallback
+  if (groupKey) {
+    const sectorLogChannel = sectorCache[groupKey]?.settings?.logChannelId;
+    console.log(`[sendSystemLog] sector=${groupKey}, logChannelId=${sectorLogChannel ?? 'none'}`);
+    if (!sectorLogChannel) return; // มีการระบุ sector แต่ไม่มีแชนแนล → ไม่ส่ง
+    bot.sendMessage(sectorLogChannel, message, { parse_mode: 'HTML' }).catch(() => {});
+    return;
   }
-  console.log(`[sendSystemLog] groupId=${groupKey}, logChannelId=${sectorCache[groupKey]?.settings?.logChannelId ?? 'none'}, → targetChannel=${targetChannel}`);
-  if (!targetChannel) return;
-  bot.sendMessage(targetChannel, message, { parse_mode: 'HTML' }).catch(() => {});
+
+  // ไม่ได้ระบุ groupId → ใช้แชนแนลกลาง (สำหรับ log ระบบ เช่น ban, warn manual)
+  if (!LOG_CHANNEL_ID) return;
+  bot.sendMessage(LOG_CHANNEL_ID, message, { parse_mode: 'HTML' }).catch(() => {});
 }
 
 // ==========================================
