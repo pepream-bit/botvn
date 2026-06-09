@@ -105,6 +105,8 @@ async function loadDatabase() {
       sectorCache[group.id.toString()] = config;
     }
     console.log('📂 โหลดข้อมูลเข้าสู่หน่วยความจำเสร็จสิ้น');
+    console.log('🗂️ sectorCache keys:', Object.keys(sectorCache));
+    console.log('🛰️ TARGET_GROUPS ids:', TARGET_GROUPS.map(g => `${g.id} (${typeof g.id})`));
   } catch (e) {
     console.error('❌ โหลดข้อมูล DB ล้มเหลว:', e.message);
   }
@@ -563,9 +565,9 @@ bot.on('message', async (msg) => {
     usernameCache[msg.from.username.toLowerCase().replace('@', '')] = { id: msg.from.id, name: fullName };
   }
 
-  const isTargetGroup = TARGET_GROUPS.some(g => g.id === msg.chat.id);
+  const isTargetGroup = TARGET_GROUPS.some(g => Number(g.id) === msg.chat.id);
   const currentSector = sectorCache[msg.chat.id.toString()];
-  const groupInfo = TARGET_GROUPS.find(g => g.id === msg.chat.id);
+  const groupInfo = TARGET_GROUPS.find(g => Number(g.id) === msg.chat.id);
 
   // 🛡️ [AUTO DEFENSE] ทำงานเฉพาะในกลุ่มเป้าหมาย ไม่ใช่ Whitelist
   if (isTargetGroup && currentSector && !globalWhitelist.includes(msg.from.id)) {
