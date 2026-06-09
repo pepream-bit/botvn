@@ -36,7 +36,9 @@ const SectorConfigSchema = new mongoose.Schema({
   settings: {
     storyBanActive: { type: Boolean, default: false },
     nameFilterActive: { type: Boolean, default: false },
-    botMessageDeleteTime: { type: Number, default: 60000 }
+    botMessageDeleteTime: { type: Number, default: 60000 },
+    storyBanLogActive: { type: Boolean, default: false },    // เปิด/ปิด Log StoryBan
+    nameFilterLogActive: { type: Boolean, default: false }   // เปิด/ปิด Log NameFilter
   }
 }, { minimize: false });
 const SectorConfig = mongoose.model('SectorConfig', SectorConfigSchema);
@@ -303,10 +305,28 @@ function sendGroupMenu(chatId, groupId) {
     [{ text: '🛡️ ลงทัณฑ์ (Security)', callback_data: `menu_sec_${groupId}` }],
     [{ text: '🕵️ คัดกรองชื่อ (Name Filter)', callback_data: `menu_namefilter_${groupId}` }],
     [{ text: '📡 สื่อสาร (Comms)', callback_data: `menu_comms_${groupId}` }],
+    [{ text: '📜 แจ้งเตือน Log (Log Config)', callback_data: `menu_log_${groupId}` }],
     [{ text: '⚙️ ตั้งค่า (Settings)', callback_data: `menu_set_${groupId}` }],
     [{ text: '⬅️ กลับหน้าจอหลัก', callback_data: 'back_to_main' }]
   ];
   bot.sendMessage(chatId, `🛰️ <b>เซกเตอร์:</b> <code>${group.name}</code>\nเลือกระบบปฏิบัติการ:`, {
+    parse_mode: 'HTML', reply_markup: { inline_keyboard: submenu }
+  });
+}
+
+function sendLogMenu(chatId, groupId) {
+  const group = TARGET_GROUPS.find(g => g.id == groupId);
+  const config = sectorCache[groupId]?.settings;
+  if (!config) return;
+  const isStoryLogOn = config.storyBanLogActive || false;
+  const isNameLogOn = config.nameFilterLogActive || false;
+  const submenu = [
+    [{ text: isStoryLogOn ? '👻 Log StoryBan: ON' : '👻 Log StoryBan: OFF', callback_data: `toggle_logstory_${groupId}` }],
+    [{ text: isNameLogOn ? '🕵️ Log NameFilter: ON' : '🕵️ Log NameFilter: OFF', callback_data: `toggle_logname_${groupId}` }],
+    [{ text: '⬅️ ย้อนกลับ', callback_data: `select_group_${groupId}` }]
+  ];
+  bot.sendMessage(chatId,
+    `📜 <b>ตั้งค่าระบบการส่งรายงาน Log ไปยัง Channel</b>\n🛰️ เซกเตอร์: <code>${group?.name}</code>\n\nเลือกประเภท Log ที่ต้องการให้บอทส่งแจ้งเตือน:`, {
     parse_mode: 'HTML', reply_markup: { inline_keyboard: submenu }
   });
 }
@@ -424,6 +444,7 @@ bot.on('callback_query', async (query) => {
   if (data === 'menu_whitelist') return sendWhitelistMenu(chatId);
   if (data.startsWith('select_group_')) return sendGroupMenu(chatId, data.replace('select_group_', ''));
   if (data.startsWith('menu_sec_')) return sendSecurityMenu(chatId, data.replace('menu_sec_', ''));
+  if (data.startsWith('menu_log_')) return sendLogMenu(chatId, data.replace('menu_log_', ''));
   if (data.startsWith('menu_namefilter_')) return sendNameFilterMenu(chatId, data.replace('menu_namefilter_', ''));
   if (data.startsWith('menu_comms_')) return sendCommsMenu(chatId, data.replace('menu_comms_', ''));
   if (data.startsWith('menu_set_')) return sendSettingsMenu(chatId, data.replace('menu_set_', ''));
@@ -440,6 +461,18 @@ bot.on('callback_query', async (query) => {
     sectorCache[groupId].settings.nameFilterActive = !sectorCache[groupId].settings.nameFilterActive;
     await saveSectorData(groupId);
     return sendNameFilterMenu(chatId, groupId);
+  }
+  if (data.startsWith('toggle_logstory_')) {
+    const groupId = data.replace('toggle_logstory_', '');
+    sectorCache[groupId].settings.storyBanLogActive = !sectorCache[groupId].settings.storyBanLogActive;
+    await saveSectorData(groupId);
+    return sendLogMenu(chatId, groupId);
+  }
+  if (data.startsWith('toggle_logname_')) {
+    const groupId = data.replace('toggle_logname_', '');
+    sectorCache[groupId].settings.nameFilterLogActive = !sectorCache[groupId].settings.nameFilterLogActive;
+    await saveSectorData(groupId);
+    return sendLogMenu(chatId, groupId);
   }
 
   // ── ตั้งเวลาลบ ──
@@ -512,6 +545,7 @@ bot.on('message', async (msg) => {
 
   const isTargetGroup = TARGET_GROUPS.some(g => g.id === msg.chat.id);
   const currentSector = sectorCache[msg.chat.id];
+  const groupInfo = TARGET_GROUPS.find(g => g.id === msg.chat.id);
 
   // 🛡️ [AUTO DEFENSE] ทำงานเฉพาะในกลุ่มเป้าหมาย ไม่ใช่ Whitelist
   if (isTargetGroup && currentSector && !globalWhitelist.includes(msg.from.id)) {
@@ -521,9 +555,11 @@ bot.on('message', async (msg) => {
         (msg.forward_from_chat || msg.forward_from || msg.story || msg.forward_date)) {
       bot.deleteMessage(msg.chat.id, msg.message_id).catch(() => {});
       bot.banChatMember(msg.chat.id, msg.from.id).catch(() => {});
-      await sendSystemLog(
-        `👻 <b>[STORYBAN TRIGGERED]</b>\nเป้าหมาย: <code>${fullName}</code> (🆔 <code>${msg.from.id}</code>)\nเซกเตอร์: <code>${msg.chat.title || msg.chat.id}</code>\n📅 เวลา (ไทย): <code>${getThailandTimestamp()}</code>`
-      );
+      if (currentSector.settings.storyBanLogActive) {
+        await sendSystemLog(
+          `👻 <b>[STORYBAN TRIGGERED]</b>\nเป้าหมาย: <code>${fullName}</code> (🆔 <code>${msg.from.id}</code>)\nเซกเตอร์: <code>${groupInfo?.name || msg.chat.title || msg.chat.id}</code>\n📅 เวลา (ไทย): <code>${getThailandTimestamp()}</code>`
+        );
+      }
       return;
     }
 
@@ -534,9 +570,11 @@ bot.on('message', async (msg) => {
       if (isMijji) {
         bot.deleteMessage(msg.chat.id, msg.message_id).catch(() => {});
         bot.banChatMember(msg.chat.id, msg.from.id).catch(() => {});
-        await sendSystemLog(
-          `🚫 <b>[NAME FILTER BAN]</b>\nเป้าหมาย: <code>${fullName}</code> (🆔 <code>${msg.from.id}</code>)\nเซกเตอร์: <code>${msg.chat.title || msg.chat.id}</code>\n📅 เวลา (ไทย): <code>${getThailandTimestamp()}</code>`
-        );
+        if (currentSector.settings.nameFilterLogActive) {
+          await sendSystemLog(
+            `🚫 <b>[NAME FILTER BAN]</b>\nเป้าหมาย: <code>${fullName}</code> (🆔 <code>${msg.from.id}</code>)\nเซกเตอร์: <code>${groupInfo?.name || msg.chat.title || msg.chat.id}</code>\n📅 เวลา (ไทย): <code>${getThailandTimestamp()}</code>`
+          );
+        }
         return;
       }
     }
