@@ -246,19 +246,10 @@ bot.on('polling_error', (err) => {
 
 async function sendSystemLog(message, groupId = null) {
   const groupKey = groupId ? groupId.toString() : null;
-
-  // ถ้าระบุ groupId มา → ใช้แชนแนลของเซกเตอร์นั้นเท่านั้น ไม่ fallback
-  if (groupKey) {
-    const sectorLogChannel = sectorCache[groupKey]?.settings?.logChannelId;
-    console.log(`[sendSystemLog] sector=${groupKey}, logChannelId=${sectorLogChannel ?? 'none'}`);
-    if (!sectorLogChannel) return; // มีการระบุ sector แต่ไม่มีแชนแนล → ไม่ส่ง
-    bot.sendMessage(sectorLogChannel, message, { parse_mode: 'HTML' }).catch(() => {});
-    return;
-  }
-
-  // ไม่ได้ระบุ groupId → ใช้แชนแนลกลาง (สำหรับ log ระบบ เช่น ban, warn manual)
-  if (!LOG_CHANNEL_ID) return;
-  bot.sendMessage(LOG_CHANNEL_ID, message, { parse_mode: 'HTML' }).catch(() => {});
+  if (!groupKey) return; // ไม่มี groupId → ไม่ส่ง
+  const sectorLogChannel = sectorCache[groupKey]?.settings?.logChannelId;
+  if (!sectorLogChannel) return; // ไม่มีแชนแนลตั้งไว้ → ไม่ส่ง
+  bot.sendMessage(sectorLogChannel, message, { parse_mode: 'HTML' }).catch(() => {});
 }
 
 // ==========================================
@@ -887,7 +878,7 @@ bot.on('message', async (msg) => {
           );
           if (delTime > 0) setTimeout(() => { bot.deleteMessage(targetGroupId, m.message_id).catch(() => {}); }, delTime);
 
-          await sendSystemLog(`📜 <b>[ AUTO-BAN LOG ]</b>\nเซกเตอร์: ${groupName}\nเป้าหมาย: ${targetName} (🆔 <code>${targetUserId}</code>)\nสาเหตุ: ${reason}\n📅 เวลา: <code>${getThailandTimestamp()}</code>`);
+          await sendSystemLog(`📜 <b>[ AUTO-BAN LOG ]</b>\nเซกเตอร์: ${groupName}\nเป้าหมาย: ${targetName} (🆔 <code>${targetUserId}</code>)\nสาเหตุ: ${reason}\n📅 เวลา: <code>${getThailandTimestamp()}</code>`, groupId);
           bot.sendMessage(chatId, `☢️ <b>Warn ครบเกณฑ์ — AUTO-BAN สำเร็จ!</b>`, { parse_mode: 'HTML', reply_markup: finishMenu });
         } else {
           const rem = WARN_LIMIT - currentWarn;
@@ -897,7 +888,7 @@ bot.on('message', async (msg) => {
           );
           if (delTime > 0) setTimeout(() => { bot.deleteMessage(targetGroupId, m.message_id).catch(() => {}); }, delTime);
 
-          await sendSystemLog(`📜 <b>[ WARN LOG ]</b>\nเซกเตอร์: ${groupName}\nเป้าหมาย: ${targetName} (🆔 <code>${targetUserId}</code>) | ${currentWarn}/${WARN_LIMIT}\nสาเหตุ: ${reason}\n📅 เวลา: <code>${getThailandTimestamp()}</code>`);
+          await sendSystemLog(`📜 <b>[ WARN LOG ]</b>\nเซกเตอร์: ${groupName}\nเป้าหมาย: ${targetName} (🆔 <code>${targetUserId}</code>) | ${currentWarn}/${WARN_LIMIT}\nสาเหตุ: ${reason}\n📅 เวลา: <code>${getThailandTimestamp()}</code>`, groupId);
           bot.sendMessage(chatId, `☢️ <b>Warn สำเร็จ [${currentWarn}/${WARN_LIMIT}]</b>`, { parse_mode: 'HTML', reply_markup: finishMenu });
         }
       } catch (e) {
@@ -933,7 +924,7 @@ bot.on('message', async (msg) => {
         );
         if (delTime > 0) setTimeout(() => { bot.deleteMessage(targetGroupId, m.message_id).catch(() => {}); }, delTime);
 
-        await sendSystemLog(`📜 <b>[ UNWARN LOG ]</b>\nเซกเตอร์: ${groupName}\nเป้าหมาย: ${targetName} (🆔 <code>${targetUserId}</code>) | ${oldWarn} → ${currentWarn}\n📅 เวลา: <code>${getThailandTimestamp()}</code>`);
+        await sendSystemLog(`📜 <b>[ UNWARN LOG ]</b>\nเซกเตอร์: ${groupName}\nเป้าหมาย: ${targetName} (🆔 <code>${targetUserId}</code>) | ${oldWarn} → ${currentWarn}\n📅 เวลา: <code>${getThailandTimestamp()}</code>`, groupId);
         bot.sendMessage(chatId, `🧬 <b>Unwarn สำเร็จ!</b>`, { parse_mode: 'HTML', reply_markup: finishMenu });
       } catch (e) {
         bot.sendMessage(chatId, `⚠️ <b>Unwarn ล้มเหลว:</b> <code>${e.message}</code>`, { parse_mode: 'HTML', reply_markup: finishMenu });
@@ -984,7 +975,7 @@ bot.on('message', async (msg) => {
         );
         if (delTime > 0) setTimeout(() => { bot.deleteMessage(targetGroupId, m.message_id).catch(() => {}); }, delTime);
 
-        await sendSystemLog(`📜 <b>[ BAN LOG ]</b>\nเซกเตอร์: ${groupName}\nเป้าหมาย: ${targetName} (🆔 <code>${targetUserId}</code>)\nข้อหา: ${reason}\n📅 เวลา: <code>${getThailandTimestamp()}</code>`);
+        await sendSystemLog(`📜 <b>[ BAN LOG ]</b>\nเซกเตอร์: ${groupName}\nเป้าหมาย: ${targetName} (🆔 <code>${targetUserId}</code>)\nข้อหา: ${reason}\n📅 เวลา: <code>${getThailandTimestamp()}</code>`, groupId);
         bot.sendMessage(chatId, `✅ <b>BAN สำเร็จ</b>`, { parse_mode: 'HTML', reply_markup: finishMenu });
       } catch (e) {
         bot.sendMessage(chatId, `⚠️ <b>BAN ล้มเหลว:</b> <code>${e.message}</code>`, { parse_mode: 'HTML', reply_markup: finishMenu });
@@ -1011,7 +1002,7 @@ bot.on('message', async (msg) => {
         );
         if (delTime > 0) setTimeout(() => { bot.deleteMessage(targetGroupId, m.message_id).catch(() => {}); }, delTime);
 
-        await sendSystemLog(`📜 <b>[ UNBAN LOG ]</b>\nเซกเตอร์: ${groupName}\nเป้าหมาย: ${targetName} (🆔 <code>${targetUserId}</code>)\nหมายเหตุ: ${reason}\n📅 เวลา: <code>${getThailandTimestamp()}</code>`);
+        await sendSystemLog(`📜 <b>[ UNBAN LOG ]</b>\nเซกเตอร์: ${groupName}\nเป้าหมาย: ${targetName} (🆔 <code>${targetUserId}</code>)\nหมายเหตุ: ${reason}\n📅 เวลา: <code>${getThailandTimestamp()}</code>`, groupId);
         bot.sendMessage(chatId, `✅ <b>UNBAN สำเร็จ</b>`, { parse_mode: 'HTML', reply_markup: finishMenu });
       } catch (e) {
         bot.sendMessage(chatId, `⚠️ <b>UNBAN ล้มเหลว:</b> <code>${e.message}</code>`, { parse_mode: 'HTML', reply_markup: finishMenu });
