@@ -309,7 +309,10 @@ function sendWhitelistMenu(chatId) {
       { text: '➕ เพิ่ม Admin', callback_data: `opt_addwl_global` },
       { text: '➖ ลบ Admin', callback_data: `opt_delwl_global` }
     ],
-    [{ text: botStatusNotifyActive ? '🤖 สถานะแจ้งเตือน: เปิด 🟢' : '🤖 สถานะแจ้งเตือน: ปิด 🔴', callback_data: 'toggle_bot_notify' }],
+    [
+      { text: '🟢 แจ้งบอทออนไลน์', callback_data: 'broadcast_online' },
+      { text: '🔧 แจ้งปิดปรับปรุง', callback_data: 'broadcast_offline' }
+    ],
     [
       { text: '➕ เพิ่ม ID รับข้อความ', callback_data: 'opt_addnotify_global' },
       { text: '➖ ลบ ID รับข้อความ', callback_data: 'opt_delnotify_global' }
@@ -493,10 +496,31 @@ bot.on('callback_query', async (query) => {
     await saveSectorData(groupId);
     return sendNameFilterMenu(chatId, groupId);
   }
-  if (data === 'toggle_bot_notify') {
-    botStatusNotifyActive = !botStatusNotifyActive;
-    await saveGlobalConfig();
-    return sendWhitelistMenu(chatId);
+  if (data === 'broadcast_online') {
+    if (notifyUserIds.length === 0) {
+      bot.sendMessage(chatId, `⚠️ ยังไม่มี ID ในรายการแจ้งเตือน`, { reply_markup: { inline_keyboard: [[{ text: '⬅️ กลับ', callback_data: 'menu_whitelist' }]] } });
+      return;
+    }
+    notifyUserIds.forEach(id => {
+      bot.sendMessage(id,
+        `🟢 <b>บอทออนไลน์แล้ว!</b>\n\n🤖 ระบบกลับมาทำงานตามปกติแล้ว\n✅ พร้อมให้บริการเต็มรูปแบบ`
+      , { parse_mode: 'HTML' }).catch(() => {});
+    });
+    bot.sendMessage(chatId, `✅ ส่งข้อความแจ้ง <b>ออนไลน์</b> ไปยัง ${notifyUserIds.length} ID แล้ว`, { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⬅️ กลับ', callback_data: 'menu_whitelist' }]] } });
+    return;
+  }
+  if (data === 'broadcast_offline') {
+    if (notifyUserIds.length === 0) {
+      bot.sendMessage(chatId, `⚠️ ยังไม่มี ID ในรายการแจ้งเตือน`, { reply_markup: { inline_keyboard: [[{ text: '⬅️ กลับ', callback_data: 'menu_whitelist' }]] } });
+      return;
+    }
+    notifyUserIds.forEach(id => {
+      bot.sendMessage(id,
+        `🔧 <b>ปิดปรับปรุงบอทชั่วคราว</b>\n\n⚙️ ระบบกำลังอยู่ในช่วงปรับปรุง\n⏳ กรุณารอสักครู่ แล้วกลับมาใหม่อีกครั้ง`
+      , { parse_mode: 'HTML' }).catch(() => {});
+    });
+    bot.sendMessage(chatId, `✅ ส่งข้อความแจ้ง <b>ปิดปรับปรุง</b> ไปยัง ${notifyUserIds.length} ID แล้ว`, { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⬅️ กลับ', callback_data: 'menu_whitelist' }]] } });
+    return;
   }
   if (data.startsWith('toggle_logstory_')) {
     const groupId = data.replace('toggle_logstory_', '');
@@ -775,9 +799,6 @@ bot.on('message', async (msg) => {
       }
       notifyUserIds.push(targetId);
       await saveGlobalConfig();
-      if (botStatusNotifyActive) {
-        bot.sendMessage(targetId, '🤖 ระบบบอททำงานแล้ว').catch(() => {});
-      }
       bot.sendMessage(chatId, `✅ เพิ่ม ID <code>${targetId}</code> เข้าสู่ระบบแจ้งสถานะแล้ว`, { parse_mode: 'HTML', reply_markup: finishMenuWL });
       break;
     }
@@ -790,9 +811,6 @@ bot.on('message', async (msg) => {
       }
       notifyUserIds = notifyUserIds.filter(id => id !== targetId);
       await saveGlobalConfig();
-      if (botStatusNotifyActive) {
-        bot.sendMessage(targetId, '🛑 ระบบบอทหยุดทำงานแล้ว').catch(() => {});
-      }
       bot.sendMessage(chatId, `✅ ลบ ID <code>${targetId}</code> ออกจากระบบแจ้งสถานะแล้ว`, { parse_mode: 'HTML', reply_markup: finishMenuWL });
       break;
     }
