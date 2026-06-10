@@ -24,7 +24,9 @@ if (!token || !mongoUri || !LOG_CHANNEL_ID) {
 const GlobalConfigSchema = new mongoose.Schema({
   configId: { type: String, default: 'main' },
   whitelistIds: { type: [Number], default: [] },
-  targetGroups: { type: [{ id: Number, name: String }], default: [] }
+  targetGroups: { type: [{ id: Number, name: String }], default: [] },
+  botStatusNotifyActive: { type: Boolean, default: false },
+  notifyUserIds: { type: [Number], default: [] }
 });
 const GlobalConfig = mongoose.model('GlobalConfig', GlobalConfigSchema);
 
@@ -49,6 +51,8 @@ const SectorConfig = mongoose.model('SectorConfig', SectorConfigSchema);
 // ==========================================
 let globalWhitelist = [];
 let TARGET_GROUPS = [];
+let botStatusNotifyActive = false;
+let notifyUserIds = [];
 const usernameCache = {};   // { "username_lower": { id, name } }
 const sectorCache = {};     // { groupId: SectorConfig doc }
 const monitorSessions = new Map();
@@ -90,6 +94,8 @@ async function loadDatabase() {
     }
     globalWhitelist = gConfig.whitelistIds;
     TARGET_GROUPS = gConfig.targetGroups || [];
+    botStatusNotifyActive = gConfig.botStatusNotifyActive || false;
+    notifyUserIds = gConfig.notifyUserIds || [];
 
     // โหลดค่าของแต่ละกลุ่ม
     for (const group of TARGET_GROUPS) {
@@ -116,7 +122,7 @@ async function saveGlobalConfig() {
   try {
     await GlobalConfig.findOneAndUpdate(
       { configId: 'main' },
-      { whitelistIds: globalWhitelist, targetGroups: TARGET_GROUPS },
+      { whitelistIds: globalWhitelist, targetGroups: TARGET_GROUPS, botStatusNotifyActive, notifyUserIds },
       { upsert: true }
     );
   } catch (e) {
@@ -295,15 +301,23 @@ function sendWhitelistMenu(chatId) {
         return `${i + 1}. 🆔 <code>${id}</code> [${name}]`;
       }).join('\n')
     : '<i>ไม่มีข้อมูล</i>';
+  const notifyText = notifyUserIds.length > 0
+    ? notifyUserIds.map(id => `   └ <code>${id}</code>`).join('\n')
+    : '   └ ไม่มีข้อมูล ID';
   const submenu = [
     [
       { text: '➕ เพิ่ม Admin', callback_data: `opt_addwl_global` },
       { text: '➖ ลบ Admin', callback_data: `opt_delwl_global` }
     ],
+    [{ text: botStatusNotifyActive ? '🤖 สถานะแจ้งเตือน: เปิด 🟢' : '🤖 สถานะแจ้งเตือน: ปิด 🔴', callback_data: 'toggle_bot_notify' }],
+    [
+      { text: '➕ เพิ่ม ID รับข้อความ', callback_data: 'opt_addnotify_global' },
+      { text: '➖ ลบ ID รับข้อความ', callback_data: 'opt_delnotify_global' }
+    ],
     [{ text: '⬅️ กลับสู่แผงควบคุมหลัก', callback_data: 'back_to_main' }]
   ];
   bot.sendMessage(chatId,
-    `👥 <b>ระบบจัดการผู้ควบคุม (Whitelist)</b>\n━━━━━━━━━━━━━━━━━━━━\n${wlText}\n━━━━━━━━━━━━━━━━━━━━`, {
+    `👥 <b>ระบบจัดการผู้ควบคุม (Whitelist)</b>\n━━━━━━━━━━━━━━━━━━━━\n${wlText}\n━━━━━━━━━━━━━━━━━━━━\n\n<b>📢 รายชื่อ ID ที่รอรับการแจ้งเตือน:</b>\n${notifyText}`, {
     parse_mode: 'HTML', reply_markup: { inline_keyboard: submenu }
   });
 }
@@ -479,6 +493,11 @@ bot.on('callback_query', async (query) => {
     await saveSectorData(groupId);
     return sendNameFilterMenu(chatId, groupId);
   }
+  if (data === 'toggle_bot_notify') {
+    botStatusNotifyActive = !botStatusNotifyActive;
+    await saveGlobalConfig();
+    return sendWhitelistMenu(chatId);
+  }
   if (data.startsWith('toggle_logstory_')) {
     const groupId = data.replace('toggle_logstory_', '');
     sectorCache[groupId].settings.storyBanLogActive = !sectorCache[groupId].settings.storyBanLogActive;
@@ -521,6 +540,7 @@ bot.on('callback_query', async (query) => {
     if (action.includes('wl')) backTarget = 'menu_whitelist';
     if (action.includes('sector')) backTarget = 'menu_sectors';
     if (action.includes('logch')) backTarget = `menu_log_${groupId}`;
+    if (action.includes('notify')) backTarget = 'menu_whitelist';
 
     const cancelMenu = { inline_keyboard: [[{ text: '❌ ยกเลิกและกลับ', callback_data: backTarget }]] };
 
@@ -536,8 +556,10 @@ bot.on('callback_query', async (query) => {
     if (action === 'quickjump') promptMsg = `🚀 <b>[QUICK JUMP]</b>\nส่งลิงก์ข้อความที่ต้องการสร้างปุ่มทางลัด:`;
     if (action === 'addname')   promptMsg = `➕ <b>[เพิ่มชื่อเฝ้าระวัง]</b>\nพิมพ์ชื่อหรือคำที่ต้องการเพิ่ม (เช่น <code>THEWORLD V2</code>):`;
     if (action === 'delname')   promptMsg = `➖ <b>[ลบชื่อเฝ้าระวัง]</b>\nพิมพ์ชื่อหรือคำที่ต้องการลบออก (ต้องตรงกับในระบบ):`;
-    if (action === 'addwl')     promptMsg = `➕ <b>[เพิ่ม Admin]</b>\nพิมพ์ <b>ID ตัวเลข</b> ของผู้ที่ต้องการตั้งเป็น Admin:`;
-    if (action === 'delwl')     promptMsg = `➖ <b>[ลบ Admin]</b>\nพิมพ์ <b>ID ตัวเลข</b> ของผู้ที่ต้องการปลดจาก Admin:`;
+    if (action === 'addwl')      promptMsg = `➕ <b>[เพิ่ม Admin]</b>\nพิมพ์ <b>ID ตัวเลข</b> ของผู้ที่ต้องการตั้งเป็น Admin:`;
+    if (action === 'delwl')      promptMsg = `➖ <b>[ลบ Admin]</b>\nพิมพ์ <b>ID ตัวเลข</b> ของผู้ที่ต้องการปลดจาก Admin:`;
+    if (action === 'addnotify')  promptMsg = `➕ <b>[เพิ่ม ID รับข้อความแจ้งเตือน]</b>\nพิมพ์ <b>Telegram ID</b> ของบุคคลที่ต้องการเพิ่ม:`;
+    if (action === 'delnotify')  promptMsg = `➖ <b>[ลบ ID รับข้อความแจ้งเตือน]</b>\nพิมพ์ <b>Telegram ID</b> ของบุคคลที่ต้องการลบ:`;
     if (action === 'addsector') promptMsg = `➕ <b>[เพิ่มเซกเตอร์]</b>\nพิมพ์ <b>ข้อมูลเซกเตอร์</b> (รูปแบบ: <code>IDกลุ่ม:ชื่อกลุ่ม</code>)\nตัวอย่าง: <code>-10012345678:ดาวอังคาร</code>`;
     if (action === 'delsector') promptMsg = `➖ <b>[ลบเซกเตอร์]</b>\nพิมพ์ <b>ID ตัวเลข</b> ของเซกเตอร์ที่ต้องการลบ\n(เช่น: <code>-10012345678</code>):`;
     if (action === 'setlogch')  promptMsg = `➕ <b>[ตั้งพิกัด Log Channel]</b>\nพิมพ์ <b>ID ตัวเลข</b> ของ Telegram Channel ที่ต้องการรับ Log ของกลุ่มนี้\n(ตัวอย่าง: <code>-100123456789</code>):`;
@@ -737,6 +759,41 @@ bot.on('message', async (msg) => {
       await saveGlobalConfig();
       bot.sendMessage(chatId, `✅ ปลด <code>${delId}</code> ออกจาก Whitelist แล้ว`, { parse_mode: 'HTML', reply_markup: finishMenuWL });
       await sendSystemLog(`👥 <b>[WHITELIST REMOVE]</b>\nลบ ID: <code>${delId}</code>\nโดย: ${fullName} (<code>${msg.from.id}</code>)\n📅 เวลา: <code>${getThailandTimestamp()}</code>`);
+      break;
+    }
+
+    // ── Notify User Management ──
+    case 'addnotify': {
+      const targetId = parseInt(inputStr);
+      if (isNaN(targetId)) {
+        bot.sendMessage(chatId, `❌ ID ต้องเป็นตัวเลขเท่านั้น`, { parse_mode: 'HTML', reply_markup: finishMenuWL });
+        break;
+      }
+      if (notifyUserIds.includes(targetId)) {
+        bot.sendMessage(chatId, `❌ มี ID นี้ในรายการแจ้งเตือนอยู่แล้ว`, { parse_mode: 'HTML', reply_markup: finishMenuWL });
+        break;
+      }
+      notifyUserIds.push(targetId);
+      await saveGlobalConfig();
+      if (botStatusNotifyActive) {
+        bot.sendMessage(targetId, '🤖 ระบบบอททำงานแล้ว').catch(() => {});
+      }
+      bot.sendMessage(chatId, `✅ เพิ่ม ID <code>${targetId}</code> เข้าสู่ระบบแจ้งสถานะแล้ว`, { parse_mode: 'HTML', reply_markup: finishMenuWL });
+      break;
+    }
+
+    case 'delnotify': {
+      const targetId = parseInt(inputStr);
+      if (isNaN(targetId)) {
+        bot.sendMessage(chatId, `❌ ID ต้องเป็นตัวเลขเท่านั้น`, { parse_mode: 'HTML', reply_markup: finishMenuWL });
+        break;
+      }
+      notifyUserIds = notifyUserIds.filter(id => id !== targetId);
+      await saveGlobalConfig();
+      if (botStatusNotifyActive) {
+        bot.sendMessage(targetId, '🛑 ระบบบอทหยุดทำงานแล้ว').catch(() => {});
+      }
+      bot.sendMessage(chatId, `✅ ลบ ID <code>${targetId}</code> ออกจากระบบแจ้งสถานะแล้ว`, { parse_mode: 'HTML', reply_markup: finishMenuWL });
       break;
     }
 
