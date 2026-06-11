@@ -3,6 +3,60 @@ const http = require('http');
 const mongoose = require('mongoose');
 
 // ==========================================
+// 🆕 ระบบคิวหน่วงเวลาอัจฉริยะ (Flood Wait Protection)
+// ==========================================
+class TelegramQueue {
+  constructor() {
+    this.queue = [];
+    this.isProcessing = false;
+    this.delayBetweenTasks = 150; // หน่วงเวลาระหว่างคำสั่ง 150ms (ปรับเพิ่ม/ลดได้)
+  }
+
+  // ฟังก์ชันสำหรับส่งคำสั่งเข้าคิว
+  add(taskFn) {
+    return new Promise((resolve, reject) => {
+      this.queue.push({ taskFn, resolve, reject });
+      this.processNext();
+    });
+  }
+
+  async processNext() {
+    if (this.isProcessing || this.queue.length === 0) return;
+    this.isProcessing = true;
+
+    const { taskFn, resolve, reject } = this.queue.shift();
+
+    try {
+      const result = await taskFn();
+      resolve(result);
+    } catch (error) {
+      // 🚨 ถ้าติด Flood Wait (Error 420) ให้หยุดรอตามวินาทีที่ Telegram สั่ง
+      if (error.response && error.response.body && error.response.body.parameters) {
+        const retryAfter = error.response.body.parameters.retry_after;
+        if (retryAfter) {
+          console.log(`⚠️ ติด Flood Wait! ระบบจะหยุดรอ ${retryAfter} วินาที ก่อนทำงานต่อ`);
+          await new Promise(res => setTimeout(res, retryAfter * 1000));
+          // เอาคำสั่งนี้ใส่กลับไปต้นคิวเพื่อทำงานใหม่อีกครั้ง
+          this.queue.unshift({ taskFn, resolve, reject });
+          this.isProcessing = false;
+          this.processNext();
+          return;
+        }
+      }
+      reject(error);
+    }
+
+    // หน่วงเวลาสั้นๆ ก่อนไปทำคำสั่งถัดไป เพื่อกระจายโหลด
+    await new Promise(res => setTimeout(res, this.delayBetweenTasks));
+    this.isProcessing = false;
+    this.processNext();
+  }
+}
+
+// สร้างตัวเรียกใช้งานคิวกลาง
+const tgQueue = new TelegramQueue();
+
+// ==========================================
 // 🛡️ ตั้งค่า Environment & ตัวแปรหลัก
 // ==========================================
 const token = process.env.BOT_TOKEN;
@@ -302,16 +356,16 @@ function sendWhitelistMenu(chatId) {
       }).join('\n')
     : '<i>ไม่มีข้อมูล</i>';
   const notifyText = notifyUserIds.length > 0
-    ? notifyUserIds.map(id => `   └ <code>${id}</code>`).join('\n')
-    : '   └ ไม่มีข้อมูล ID';
+    ? notifyUserIds.map(id => ` └ <code>${id}</code>`).join('\n')
+    : ' └ ไม่มีข้อมูล ID';
   const submenu = [
     [
       { text: '➕ เพิ่ม Admin', callback_data: `opt_addwl_global` },
       { text: '➖ ลบ Admin', callback_data: `opt_delwl_global` }
     ],
     [
-      { text: '🟢 แจ้งบอทออนไลน์', callback_data: 'broadcast_online' },
-      { text: '🔧 แจ้งปิดปรับปรุง', callback_data: 'broadcast_offline' }
+      { text: '🟢 แจ้งบอทออนไลน์', callback_data: 'notify_online' },
+      { text: '🔧 แจ้งปิดปรับปรุง', callback_data: 'notify_maintenance' }
     ],
     [
       { text: '➕ เพิ่ม ID รับข้อความ', callback_data: 'opt_addnotify_global' },
@@ -418,8 +472,7 @@ function sendCommsMenu(chatId, groupId) {
       { text: '📡 ประกาศ (Transmit)', callback_data: `opt_ann_${groupId}` }
     ],
     [
-      { text: '💬 ตอบด้วยลิงก์ (Reply)', callback_data: `opt_replylink_${groupId}` },
-      { text: '🚀 ทางลัด (Jump)', callback_data: `opt_quickjump_${groupId}` }
+      { text: '💬 ตอบด้วยลิงก์ (Reply)', callback_data: `opt_replylink_${groupId}` }
     ],
     [{ text: '⬅️ ย้อนกลับ', callback_data: `select_group_${groupId}` }]
   ];
@@ -496,30 +549,30 @@ bot.on('callback_query', async (query) => {
     await saveSectorData(groupId);
     return sendNameFilterMenu(chatId, groupId);
   }
-  if (data === 'broadcast_online') {
+  if (data === 'notify_online') {
     if (notifyUserIds.length === 0) {
-      bot.sendMessage(chatId, `⚠️ ยังไม่มี ID ในรายการแจ้งเตือน`, { reply_markup: { inline_keyboard: [[{ text: '⬅️ กลับ', callback_data: 'menu_whitelist' }]] } });
-      return;
+      return bot.answerCallbackQuery(query.id, { text: '❌ ไม่มีรายชื่อ ID ในระบบ', show_alert: true });
     }
-    notifyUserIds.forEach(id => {
-      bot.sendMessage(id,
-        `🟢 <b>บอทออนไลน์แล้ว!</b>\n\n🤖 ระบบกลับมาทำงานตามปกติแล้ว\n✅ พร้อมให้บริการเต็มรูปแบบ`
-      , { parse_mode: 'HTML' }).catch(() => {});
+    notifyUserIds.forEach(targetId => {
+      tgQueue.add(() => bot.sendMessage(targetId,
+        `🟢 <b>บอทออนไลน์แล้ว!</b>\n\n🤖 ระบบกลับมาทำงานตามปกติแล้ว\n✅ พร้อมให้บริการเต็มรูปแบบ`,
+        { parse_mode: 'HTML' }
+      )).catch(() => {});
     });
-    bot.sendMessage(chatId, `✅ ส่งข้อความแจ้ง <b>ออนไลน์</b> ไปยัง ${notifyUserIds.length} ID แล้ว`, { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⬅️ กลับ', callback_data: 'menu_whitelist' }]] } });
+    bot.answerCallbackQuery(query.id, { text: `🟢 กำลังทยอยส่ง 'บอทออนไลน์' ไปยัง ${notifyUserIds.length} ID...`, show_alert: false });
     return;
   }
-  if (data === 'broadcast_offline') {
+  if (data === 'notify_maintenance') {
     if (notifyUserIds.length === 0) {
-      bot.sendMessage(chatId, `⚠️ ยังไม่มี ID ในรายการแจ้งเตือน`, { reply_markup: { inline_keyboard: [[{ text: '⬅️ กลับ', callback_data: 'menu_whitelist' }]] } });
-      return;
+      return bot.answerCallbackQuery(query.id, { text: '❌ ไม่มีรายชื่อ ID ในระบบ', show_alert: true });
     }
-    notifyUserIds.forEach(id => {
-      bot.sendMessage(id,
-        `🔧 <b>ปิดปรับปรุงบอทชั่วคราว</b>\n\n⚙️ ระบบกำลังอยู่ในช่วงปรับปรุง\n⏳ กรุณารอสักครู่ แล้วกลับมาใหม่อีกครั้ง`
-      , { parse_mode: 'HTML' }).catch(() => {});
+    notifyUserIds.forEach(targetId => {
+      tgQueue.add(() => bot.sendMessage(targetId,
+        `🔧 <b>ปิดปรับปรุงบอทชั่วคราว</b>\n\n⚙️ ระบบกำลังอยู่ในช่วงปรับปรุง\n⏳ กรุณารอสักครู่ แล้วกลับมาใหม่อีกครั้ง`,
+        { parse_mode: 'HTML' }
+      )).catch(() => {});
     });
-    bot.sendMessage(chatId, `✅ ส่งข้อความแจ้ง <b>ปิดปรับปรุง</b> ไปยัง ${notifyUserIds.length} ID แล้ว`, { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⬅️ กลับ', callback_data: 'menu_whitelist' }]] } });
+    bot.answerCallbackQuery(query.id, { text: `🔧 กำลังทยอยส่ง 'ปิดปรับปรุง' ไปยัง ${notifyUserIds.length} ID...`, show_alert: false });
     return;
   }
   if (data.startsWith('toggle_logstory_')) {
@@ -582,8 +635,8 @@ bot.on('callback_query', async (query) => {
     if (action === 'delname')   promptMsg = `➖ <b>[ลบชื่อเฝ้าระวัง]</b>\nพิมพ์ชื่อหรือคำที่ต้องการลบออก (ต้องตรงกับในระบบ):`;
     if (action === 'addwl')      promptMsg = `➕ <b>[เพิ่ม Admin]</b>\nพิมพ์ <b>ID ตัวเลข</b> ของผู้ที่ต้องการตั้งเป็น Admin:`;
     if (action === 'delwl')      promptMsg = `➖ <b>[ลบ Admin]</b>\nพิมพ์ <b>ID ตัวเลข</b> ของผู้ที่ต้องการปลดจาก Admin:`;
-    if (action === 'addnotify')  promptMsg = `➕ <b>[เพิ่ม ID รับข้อความแจ้งเตือน]</b>\nพิมพ์ <b>Telegram ID</b> ของบุคคลที่ต้องการเพิ่ม:`;
-    if (action === 'delnotify')  promptMsg = `➖ <b>[ลบ ID รับข้อความแจ้งเตือน]</b>\nพิมพ์ <b>Telegram ID</b> ของบุคคลที่ต้องการลบ:`;
+    if (action === 'addnotify')  promptMsg = `➕ <b>[เพิ่ม ID รับข้อความแจ้งเตือน]</b>\nพิมพ์ <b>Telegram ID</b> ของบุคคล หรือ <b>ID กลุ่ม</b>\n(กลุ่มจะขึ้นต้นด้วย <code>-100</code> เช่น <code>-100123456789</code>):`;
+    if (action === 'delnotify')  promptMsg = `➖ <b>[ลบ ID รับข้อความแจ้งเตือน]</b>\nพิมพ์ <b>Telegram ID หรือ ID กลุ่ม</b> ที่ต้องการลบออกจากระบบ:`;
     if (action === 'addsector') promptMsg = `➕ <b>[เพิ่มเซกเตอร์]</b>\nพิมพ์ <b>ข้อมูลเซกเตอร์</b> (รูปแบบ: <code>IDกลุ่ม:ชื่อกลุ่ม</code>)\nตัวอย่าง: <code>-10012345678:ดาวอังคาร</code>`;
     if (action === 'delsector') promptMsg = `➖ <b>[ลบเซกเตอร์]</b>\nพิมพ์ <b>ID ตัวเลข</b> ของเซกเตอร์ที่ต้องการลบ\n(เช่น: <code>-10012345678</code>):`;
     if (action === 'setlogch')  promptMsg = `➕ <b>[ตั้งพิกัด Log Channel]</b>\nพิมพ์ <b>ID ตัวเลข</b> ของ Telegram Channel ที่ต้องการรับ Log ของกลุ่มนี้\n(ตัวอย่าง: <code>-100123456789</code>):`;
@@ -619,8 +672,8 @@ bot.on('message', async (msg) => {
     // 1. STORY BAN
     if (currentSector.settings.storyBanActive &&
         (msg.forward_from_chat || msg.forward_from || msg.story || msg.forward_date)) {
-      bot.deleteMessage(msg.chat.id, msg.message_id).catch(() => {});
-      bot.banChatMember(msg.chat.id, msg.from.id).catch(() => {});
+      tgQueue.add(() => bot.deleteMessage(msg.chat.id, msg.message_id)).catch(() => {});
+      tgQueue.add(() => bot.banChatMember(msg.chat.id, msg.from.id)).catch(() => {});
       if (currentSector.settings.storyBanLogActive) {
         await sendSystemLog(
           `👻 <b>[STORYBAN TRIGGERED]</b>\nเป้าหมาย: <code>${fullName}</code> (🆔 <code>${msg.from.id}</code>)\nเซกเตอร์: <code>${groupInfo?.name || msg.chat.title || msg.chat.id}</code>\n📅 เวลา (ไทย): <code>${getThailandTimestamp()}</code>`,
@@ -635,8 +688,8 @@ bot.on('message', async (msg) => {
       const senderName = fullName.toLowerCase();
       const isMijji = currentSector.impersonatorNames.some(bName => senderName.includes(bName.toLowerCase()));
       if (isMijji) {
-        bot.deleteMessage(msg.chat.id, msg.message_id).catch(() => {});
-        bot.banChatMember(msg.chat.id, msg.from.id).catch(() => {});
+        tgQueue.add(() => bot.deleteMessage(msg.chat.id, msg.message_id)).catch(() => {});
+        tgQueue.add(() => bot.banChatMember(msg.chat.id, msg.from.id)).catch(() => {});
         if (currentSector.settings.nameFilterLogActive) {
           await sendSystemLog(
             `🚫 <b>[NAME FILTER BAN]</b>\nเป้าหมาย: <code>${fullName}</code> (🆔 <code>${msg.from.id}</code>)\nเซกเตอร์: <code>${groupInfo?.name || msg.chat.title || msg.chat.id}</code>\n📅 เวลา (ไทย): <code>${getThailandTimestamp()}</code>`,
