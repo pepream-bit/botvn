@@ -1,19 +1,83 @@
 const TelegramBot = require('node-telegram-bot-api');
 const http = require('http');
 const mongoose = require('mongoose');
-
-// ==========================================
-// 👾 RPG Boss System — โหลด Controller
-// ==========================================
 const {
-  getAllBosses, getBossById, createBoss, updateBoss, deleteBoss,
-  getSpawnSettings, saveSpawnSettings, spawnBoss,
-  checkAutoSpawn, incrementMessageCounter
+  getBossById,
+  spawnBoss,
+  getSpawnSettings,
 } = require('./bossController');
-
 const {
-  awardTag, recordKill, checkExpiredTags, getPlayerStats
+  awardTag,
+  recordKill,
 } = require('./tagController');
+
+// ==========================================
+// ⚔️ ระบบบอส: State การสู้รบ (In-Memory)
+// ==========================================
+// activeBossFights: { bossId_string → { hp, maxHp, messageId, chatId, defeatMessageSent } }
+const activeBossFights = {};
+
+// HP bar debounce: { messageId → timeoutHandle }
+// ป้องกัน Telegram flood — edit ได้สูงสุดทุก HP_UPDATE_DELAY ms
+const hpUpdateDebounce = {};
+const HP_UPDATE_DELAY = 3000; // 3 วินาที
+
+function buildHpBar(current, max, length = 10) {
+  const pct = Math.max(0, current / max);
+  const filled = Math.round(pct * length);
+  return '🟥'.repeat(filled) + '⬛'.repeat(length - filled);
+}
+
+async function scheduleBossHpUpdate(bot, chatId, messageId, boss, currentHp) {
+  const key = `${chatId}_${messageId}`;
+  // ยกเลิก debounce เดิม (ถ้ามี) แล้วตั้งใหม่
+  if (hpUpdateDebounce[key]) clearTimeout(hpUpdateDebounce[key]);
+
+  hpUpdateDebounce[key] = setTimeout(async () => {
+    delete hpUpdateDebounce[key];
+    const fight = activeBossFights[boss._id.toString()];
+    if (!fight || fight.defeatMessageSent) return;
+
+    const latestHp = fight.hp;
+    const pct = Math.max(0, Math.round((latestHp / fight.maxHp) * 100));
+    const bar = buildHpBar(latestHp, fight.maxHp);
+
+    const newCaption =
+      `⚔️ <b>[ บอสกำลังถูกโจมตี! ]</b>\n` +
+      `━━━━━━━━━━━━━━━━━━━━\n` +
+      `👾 <b>${boss.name}</b>\n` +
+      `❤️ HP: <b>${latestHp.toLocaleString()} / ${fight.maxHp.toLocaleString()}</b>\n` +
+      `${bar} ${pct}%\n` +
+      `🏆 รางวัล: <b>${boss.rewardTag}</b>\n` +
+      `━━━━━━━━━━━━━━━━━━━━\n` +
+      `⚡️ ใครกดปุ่มก่อน... ได้ฉายา!`;
+
+    const keyboard = {
+      inline_keyboard: [[
+        { text: `⚔️ โจมตี ${boss.name}! (${latestHp.toLocaleString()} HP)`, callback_data: `boss_attack_${boss._id}` }
+      ]]
+    };
+
+    try {
+      if (boss.imageUrl) {
+        await bot.editMessageCaption(newCaption, {
+          chat_id: chatId, message_id: messageId,
+          parse_mode: 'HTML', reply_markup: keyboard
+        });
+      } else {
+        await bot.editMessageText(newCaption, {
+          chat_id: chatId, message_id: messageId,
+          parse_mode: 'HTML', reply_markup: keyboard
+        });
+      }
+    } catch (e) {
+      // ข้าม error "message not modified" (ปกติมากใน Telegram)
+      if (!e.message?.includes('not modified')) {
+        console.warn(`⚠️ [BossHP] edit ล้มเหลว: ${e.message}`);
+      }
+    }
+  }, HP_UPDATE_DELAY);
+}
 
 // ==========================================
 // 🆕 ระบบคิวหน่วงเวลาอัจฉริยะ (Flood Wait Protection)
@@ -123,12 +187,6 @@ let notifyUserIds = [];
 const usernameCache = {};   // { "username_lower": { id, name } }
 const sectorCache = {};     // { groupId: SectorConfig doc }
 const monitorSessions = new Map();
-
-// session สำหรับระบบบอส (แยกจาก monitorSessions เพื่อไม่ให้ชนกัน)
-const bossEditSessions = new Map(); // { userId: { action, bossId, field, chatId } }
-
-// เก็บ messageId ของบอสที่เกิดอยู่ เพื่อลบปุ่มเมื่อถูกล่า
-const activeBossMessages = new Map(); // { `${chatId}_${bossId}`: messageId }
 
 const WARN_LIMIT = 2;
 
@@ -349,7 +407,6 @@ function sendMainMenu(chatId) {
     { text: `🛰️ จัดการเซกเตอร์`, callback_data: `menu_sectors` },
     { text: `👥 จัดการ Whitelist`, callback_data: `menu_whitelist` }
   ]);
-  keyboard.push([{ text: `👾 Boss Manager`, callback_data: `menu_boss` }]);
   keyboard.push([{ text: `❌ ปิดแผงควบคุม`, callback_data: `close_main_menu` }]);
   bot.sendMessage(chatId, '🛸 <b>แผงควบคุมหลัก (Alien Command)</b>\nโปรดเลือกพิกัดเซกเตอร์:', {
     parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard }
@@ -530,186 +587,141 @@ function sendSettingsMenu(chatId, groupId) {
   });
 }
 
-// ==========================================
-// 👾 Boss Panel Functions
-// ==========================================
-
-// เมนูหลัก Boss Panel
-async function sendBossMainMenu(chatId) {
-  const settings = await getSpawnSettings();
-  const autoText = settings.autoSpawnActive ? '🟢 Auto Spawn: ON' : '🔴 Auto Spawn: OFF';
-  const modeText = settings.spawnMode === 'time'
-    ? `⏱️ ทุก ${settings.spawnIntervalMinutes} นาที`
-    : `💬 ทุก ${settings.spawnEveryNMessages} ข้อความ`;
-
-  const submenu = [
-    [{ text: '📦 คลังบอส (จัดการ)', callback_data: 'boss_list' }],
-    [{ text: '⚔️ เสกบอสทันที (Manual)', callback_data: 'boss_spawn_select' }],
-    [{ text: autoText, callback_data: 'boss_toggle_auto' }],
-    [{ text: `📊 โหมด: ${modeText}`, callback_data: 'boss_spawn_mode_menu' }],
-    [{ text: '⬅️ กลับหน้าจอหลัก', callback_data: 'back_to_main' }]
-  ];
-  bot.sendMessage(chatId,
-    `👾 <b>Boss Manager Panel</b>\n━━━━━━━━━━━━━━━━━━━━\n🤖 ระบบจัดการบอส RPG\n━━━━━━━━━━━━━━━━━━━━`,
-    { parse_mode: 'HTML', reply_markup: { inline_keyboard: submenu } }
-  );
-}
-
-// แสดงรายการบอสในคลัง
-async function sendBossList(chatId) {
-  const bosses = await getAllBosses();
-
-  if (bosses.length === 0) {
-    return bot.sendMessage(chatId,
-      `📦 <b>คลังบอสว่างเปล่า</b>\nกด "➕ เพิ่มบอสใหม่" เพื่อเริ่มต้น`,
-      { parse_mode: 'HTML', reply_markup: { inline_keyboard: [
-        [{ text: '➕ เพิ่มบอสใหม่', callback_data: 'boss_create' }],
-        [{ text: '⬅️ กลับ Boss Panel', callback_data: 'menu_boss' }]
-      ]}}
-    );
-  }
-
-  // สร้างปุ่มบอสแต่ละตัว
-  const bossButtons = bosses.map(b => [{
-    text: `${b.isActive ? '🟢' : '🔴'} ${b.name} (HP: ${b.hp.toLocaleString()})`,
-    callback_data: `boss_detail_${b._id}`
-  }]);
-  bossButtons.push([{ text: '➕ เพิ่มบอสใหม่', callback_data: 'boss_create' }]);
-  bossButtons.push([{ text: '⬅️ กลับ Boss Panel', callback_data: 'menu_boss' }]);
-
-  bot.sendMessage(chatId,
-    `📦 <b>คลังบอสทั้งหมด (${bosses.length} ตัว)</b>\n🟢 = เปิดใช้งาน | 🔴 = ปิดใช้งาน`,
-    { parse_mode: 'HTML', reply_markup: { inline_keyboard: bossButtons } }
-  );
-}
-
-// แสดงรายละเอียดบอสตัวเดียว
-async function sendBossDetail(chatId, bossId) {
-  const boss = await getBossById(bossId);
-  if (!boss) return bot.sendMessage(chatId, '❌ ไม่พบบอสนี้ในคลัง');
-
-  const groupName = TARGET_GROUPS.find(g => g.id === boss.targetGroupId)?.name || `ID: ${boss.targetGroupId}`;
-  const tagDurText = boss.tagDurationHours === 0 ? 'ถาวร' : `${boss.tagDurationHours} ชั่วโมง`;
-
-  const submenu = [
-    [
-      { text: '✏️ แก้ชื่อ', callback_data: `boss_edit_${bossId}_name` },
-      { text: '❤️ แก้ HP', callback_data: `boss_edit_${bossId}_hp` }
-    ],
-    [
-      { text: '🖼️ แก้รูป URL', callback_data: `boss_edit_${bossId}_imageUrl` },
-      { text: '🎯 แก้ % โอกาส', callback_data: `boss_edit_${bossId}_spawnRate` }
-    ],
-    [
-      { text: '🏆 แก้ฉายารางวัล', callback_data: `boss_edit_${bossId}_rewardTag` },
-      { text: '⏳ แก้อายุฉายา', callback_data: `boss_edit_${bossId}_tagDurationHours` }
-    ],
-    [{ text: boss.isActive ? '🔴 ปิดใช้งาน' : '🟢 เปิดใช้งาน', callback_data: `boss_toggle_active_${bossId}` }],
-    [{ text: '🗑️ ลบบอสนี้', callback_data: `boss_delete_confirm_${bossId}` }],
-    [{ text: '⬅️ กลับคลังบอส', callback_data: 'boss_list' }]
-  ];
-
-  bot.sendMessage(chatId,
-    `👾 <b>รายละเอียดบอส</b>\n━━━━━━━━━━━━━━━━━━━━\n` +
-    `📛 ชื่อ: <b>${boss.name}</b>\n` +
-    `❤️ HP: <b>${boss.hp.toLocaleString()}</b>\n` +
-    `🛰️ กลุ่มเป้าหมาย: <b>${groupName}</b>\n` +
-    `🎲 โอกาสเกิด: <b>${boss.spawnRate}%</b>\n` +
-    `🏆 ฉายารางวัล: <b>${boss.rewardTag}</b>\n` +
-    `⏳ อายุฉายา: <b>${tagDurText}</b>\n` +
-    `🖼️ รูป: <code>${boss.imageUrl || 'ไม่มี'}</code>\n` +
-    `━━━━━━━━━━━━━━━━━━━━`,
-    { parse_mode: 'HTML', reply_markup: { inline_keyboard: submenu } }
-  );
-}
-
-// เมนูเลือกบอสเพื่อ Manual Spawn (พร้อม Confirmation)
-async function sendBossSpawnSelect(chatId) {
-  const bosses = await getAllBosses();
-  const activeBosses = bosses.filter(b => b.isActive);
-
-  if (activeBosses.length === 0) {
-    return bot.sendMessage(chatId, '❌ ไม่มีบอสที่เปิดใช้งานในคลัง กรุณาเพิ่มหรือเปิดบอสก่อน',
-      { reply_markup: { inline_keyboard: [[{ text: '⬅️ กลับ', callback_data: 'menu_boss' }]] } }
-    );
-  }
-
-  const bossButtons = activeBosses.map(b => [{
-    text: `⚔️ ${b.name}`,
-    callback_data: `boss_spawn_confirm_${b._id}`
-  }]);
-  bossButtons.push([{ text: '❌ ยกเลิก', callback_data: 'menu_boss' }]);
-
-  bot.sendMessage(chatId,
-    `⚔️ <b>เลือกบอสที่จะเสก</b>\nกดเลือกบอส — จะมีหน้ายืนยันก่อนเสกจริง`,
-    { parse_mode: 'HTML', reply_markup: { inline_keyboard: bossButtons } }
-  );
-}
-
-// หน้ายืนยันก่อน Manual Spawn
-async function sendBossSpawnConfirm(chatId, bossId) {
-  const boss = await getBossById(bossId);
-  if (!boss) return;
-  const groupName = TARGET_GROUPS.find(g => g.id === boss.targetGroupId)?.name || `ID: ${boss.targetGroupId}`;
-
-  bot.sendMessage(chatId,
-    `⚠️ <b>ยืนยันการเสกบอส</b>\n━━━━━━━━━━━━━━━━━━━━\n` +
-    `👾 บอส: <b>${boss.name}</b>\n` +
-    `🛰️ กลุ่ม: <b>${groupName}</b>\n` +
-    `━━━━━━━━━━━━━━━━━━━━\n` +
-    `ยืนยันเสกบอสตัวนี้เลยหรือไม่?`,
-    { parse_mode: 'HTML', reply_markup: { inline_keyboard: [
-      [
-        { text: '✅ ยืนยัน เสกเลย!', callback_data: `boss_spawn_do_${bossId}` },
-        { text: '❌ ยกเลิก', callback_data: 'boss_spawn_select' }
-      ]
-    ]}}
-  );
-}
-
-// เมนูตั้งค่า Spawn Mode
-async function sendSpawnModeMenu(chatId) {
-  const settings = await getSpawnSettings();
-  bot.sendMessage(chatId,
-    `⚙️ <b>ตั้งค่าโหมด Auto Spawn</b>\n\n` +
-    `โหมดปัจจุบัน: <b>${settings.spawnMode === 'time' ? '⏱️ ตามเวลา' : '💬 นับข้อความ'}</b>\n` +
-    `ทุก: <b>${settings.spawnMode === 'time' ? settings.spawnIntervalMinutes + ' นาที' : settings.spawnEveryNMessages + ' ข้อความ'}</b>`,
-    { parse_mode: 'HTML', reply_markup: { inline_keyboard: [
-      [
-        { text: '⏱️ โหมดเวลา', callback_data: 'boss_set_mode_time' },
-        { text: '💬 โหมดข้อความ', callback_data: 'boss_set_mode_message' }
-      ],
-      [
-        { text: '➕ ตั้งค่าช่วงเวลา/จำนวน', callback_data: 'boss_set_interval' }
-      ],
-      [{ text: '⬅️ กลับ Boss Panel', callback_data: 'menu_boss' }]
-    ]}}
-  );
-}
-
 bot.onText(/\/start/, (msg) => {
   if (!globalWhitelist.includes(msg.from.id)) return;
   monitorSessions.delete(msg.from.id);
   sendMainMenu(msg.chat.id);
 });
 
-// คำสั่ง /boss — เปิด Boss Panel
-bot.onText(/\/boss/, (msg) => {
-  if (!globalWhitelist.includes(msg.from.id)) return;
-  sendBossMainMenu(msg.chat.id);
-});
-
 // ==========================================
 // 🔘 ระบบปุ่มกด (Callback Query)
 // ==========================================
 bot.on('callback_query', async (query) => {
+  const data = query.data;
+
+  // ══════════════════════════════════════════
+  // ⚔️ BOSS ATTACK — เปิดให้ทุกคนกดได้ (ไม่ต้องอยู่ Whitelist)
+  // ══════════════════════════════════════════
+  if (data.startsWith('boss_attack_')) {
+    const bossId = data.replace('boss_attack_', '');
+    const attackerId = query.from.id;
+    const attackerUsername = query.from.username || '';
+    const attackerName = `${query.from.first_name || ''} ${query.from.last_name || ''}`.trim()
+      || query.from.username || `ID:${attackerId}`;
+    const chatId = query.message.chat.id;
+    const messageId = query.message.message_id;
+
+    try {
+      const boss = await getBossById(bossId);
+      if (!boss) {
+        return bot.answerCallbackQuery(query.id, { text: '❌ ไม่พบบอสนี้ในระบบ', show_alert: true });
+      }
+
+      // ดึง / สร้าง fight state
+      if (!activeBossFights[bossId]) {
+        activeBossFights[bossId] = {
+          hp: boss.hp,
+          maxHp: boss.hp,
+          messageId,
+          chatId,
+          defeatMessageSent: false,
+        };
+      }
+
+      const fight = activeBossFights[bossId];
+
+      if (fight.defeatMessageSent) {
+        return bot.answerCallbackQuery(query.id, { text: '💀 บอสตัวนี้ถูกกำจัดไปแล้ว!', show_alert: false });
+      }
+
+      // คำนวณ damage (สุ่ม 1–10% ของ maxHp)
+      const dmg = Math.max(1, Math.floor(fight.maxHp * (0.01 + Math.random() * 0.09)));
+      fight.hp = Math.max(0, fight.hp - dmg);
+
+      if (fight.hp <= 0) {
+        // ══ บอสตาย ══
+        fight.defeatMessageSent = true;
+
+        // ยกเลิก debounce HP ที่ค้างอยู่
+        const debounceKey = `${chatId}_${messageId}`;
+        if (hpUpdateDebounce[debounceKey]) {
+          clearTimeout(hpUpdateDebounce[debounceKey]);
+          delete hpUpdateDebounce[debounceKey];
+        }
+
+        // ลบ fight state หลัง 5 วินาที
+        setTimeout(() => delete activeBossFights[bossId], 5000);
+
+        // แจก Tag + บันทึกการฆ่า
+        try {
+          await awardTag(
+            process.env.BOT_TOKEN, chatId,
+            attackerId, attackerUsername, attackerName,
+            boss.rewardTag, boss.tagDurationHours
+          );
+          await recordKill(attackerId, chatId, boss.name, attackerUsername, attackerName);
+        } catch (tagErr) {
+          console.warn(`⚠️ [BossKill] awardTag ล้มเหลว: ${tagErr.message}`);
+        }
+
+        // ส่ง callback ก่อน (เร็ว)
+        bot.answerCallbackQuery(query.id, {
+          text: `💥 คุณสังหาร ${boss.name} สำเร็จ! ได้รับฉายา: ${boss.rewardTag}`,
+          show_alert: true
+        }).catch(() => {});
+
+        // Edit ข้อความเป็น "บอสตาย"
+        const deadCaption =
+          `💀 <b>[ บอสถูกกำจัดแล้ว! ]</b>\n` +
+          `━━━━━━━━━━━━━━━━━━━━\n` +
+          `👾 <b>${boss.name}</b> — ถูกสังหารแล้ว\n` +
+          `⚔️ ผู้สังหาร: <a href="tg://user?id=${attackerId}">${attackerName}</a>\n` +
+          `🏆 รางวัล: <b>${boss.rewardTag}</b> ถูกมอบให้แล้ว!\n` +
+          `━━━━━━━━━━━━━━━━━━━━`;
+
+        try {
+          if (boss.imageUrl) {
+            await bot.editMessageCaption(deadCaption, {
+              chat_id: chatId, message_id: messageId,
+              parse_mode: 'HTML', reply_markup: { inline_keyboard: [] }
+            });
+          } else {
+            await bot.editMessageText(deadCaption, {
+              chat_id: chatId, message_id: messageId,
+              parse_mode: 'HTML', reply_markup: { inline_keyboard: [] }
+            });
+          }
+        } catch (e) {
+          if (!e.message?.includes('not modified')) console.warn(`⚠️ [BossKill] edit ล้มเหลว: ${e.message}`);
+        }
+
+      } else {
+        // ══ บอสยังมีชีวิต — ตอบ callback ทันที แล้ว schedule HP update ภายหลัง ══
+        bot.answerCallbackQuery(query.id, {
+          text: `⚔️ โจมตี ${dmg.toLocaleString()} DMG! HP เหลือ ${fight.hp.toLocaleString()}`,
+          show_alert: false
+        }).catch(() => {});
+
+        // Debounce: อัปเดต HP bar ช้าลงเพื่อกันสแปม
+        await scheduleBossHpUpdate(bot, chatId, messageId, boss, fight.hp);
+      }
+
+    } catch (e) {
+      console.error(`❌ [BossAttack] ล้มเหลว: ${e.message}`);
+      bot.answerCallbackQuery(query.id, { text: '❌ เกิดข้อผิดพลาด กรุณาลองใหม่', show_alert: true }).catch(() => {});
+    }
+    return; // หยุด ไม่ตกไป whitelist guard
+  }
+
+  // ══════════════════════════════════════════
+  // 🔒 Admin-only callbacks — ต้องอยู่ใน Whitelist
+  // ══════════════════════════════════════════
   if (!globalWhitelist.includes(query.from.id)) {
     return bot.answerCallbackQuery(query.id, { text: 'ปฏิเสธคำสั่ง! ไม่อยู่ใน Whitelist', show_alert: true });
   }
 
   const chatId = query.message.chat.id;
   const messageId = query.message.message_id;
-  const data = query.data;
 
   bot.answerCallbackQuery(query.id).catch(() => {});
   bot.deleteMessage(chatId, messageId).catch(() => {});
@@ -719,163 +731,12 @@ bot.on('callback_query', async (query) => {
   if (data === 'close_main_menu') return;
   if (data === 'menu_sectors') return sendSectorsMenu(chatId);
   if (data === 'menu_whitelist') return sendWhitelistMenu(chatId);
-  if (data === 'menu_boss') return sendBossMainMenu(chatId);
   if (data.startsWith('select_group_')) return sendGroupMenu(chatId, data.replace('select_group_', ''));
   if (data.startsWith('menu_sec_')) return sendSecurityMenu(chatId, data.replace('menu_sec_', ''));
   if (data.startsWith('menu_log_')) return sendLogMenu(chatId, data.replace('menu_log_', ''));
   if (data.startsWith('menu_namefilter_')) return sendNameFilterMenu(chatId, data.replace('menu_namefilter_', ''));
   if (data.startsWith('menu_comms_')) return sendCommsMenu(chatId, data.replace('menu_comms_', ''));
   if (data.startsWith('menu_set_')) return sendSettingsMenu(chatId, data.replace('menu_set_', ''));
-
-  // ── Boss Panel Navigation ──
-  if (data === 'boss_list') return sendBossList(chatId);
-  if (data === 'boss_create') return startBossCreate(chatId, query.from.id);
-  if (data === 'boss_spawn_select') return sendBossSpawnSelect(chatId);
-  if (data === 'boss_spawn_mode_menu') return sendSpawnModeMenu(chatId);
-  if (data.startsWith('boss_detail_')) return sendBossDetail(chatId, data.replace('boss_detail_', ''));
-  if (data.startsWith('boss_spawn_confirm_')) return sendBossSpawnConfirm(chatId, data.replace('boss_spawn_confirm_', ''));
-
-  // ── Boss: Toggle Auto Spawn ──
-  if (data === 'boss_toggle_auto') {
-    const settings = await getSpawnSettings();
-    await saveSpawnSettings({ autoSpawnActive: !settings.autoSpawnActive });
-    return sendBossMainMenu(chatId);
-  }
-
-  // ── Boss: Set Spawn Mode ──
-  if (data === 'boss_set_mode_time') {
-    await saveSpawnSettings({ spawnMode: 'time' });
-    return sendSpawnModeMenu(chatId);
-  }
-  if (data === 'boss_set_mode_message') {
-    await saveSpawnSettings({ spawnMode: 'message' });
-    return sendSpawnModeMenu(chatId);
-  }
-  if (data === 'boss_set_interval') {
-    bossEditSessions.set(query.from.id, { action: 'set_interval', chatId });
-    return bot.sendMessage(chatId,
-      `⚙️ <b>ตั้งค่าช่วงเวลา/จำนวน</b>\n\nพิมพ์ตัวเลข:\n• โหมดเวลา → จำนวนนาที (เช่น <code>30</code>)\n• โหมดข้อความ → จำนวนข้อความ (เช่น <code>50</code>)`,
-      { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '❌ ยกเลิก', callback_data: 'boss_spawn_mode_menu' }]] } }
-    );
-  }
-
-  // ── Boss: Toggle Active ──
-  if (data.startsWith('boss_toggle_active_')) {
-    const bossId = data.replace('boss_toggle_active_', '');
-    const boss = await getBossById(bossId);
-    if (boss) await updateBoss(bossId, { isActive: !boss.isActive });
-    return sendBossDetail(chatId, bossId);
-  }
-
-  // ── Boss: Delete Confirmation ──
-  if (data.startsWith('boss_delete_confirm_')) {
-    const bossId = data.replace('boss_delete_confirm_', '');
-    const boss = await getBossById(bossId);
-    if (!boss) return;
-    return bot.sendMessage(chatId,
-      `🗑️ <b>ยืนยันการลบบอส "${boss.name}"?</b>\nการกระทำนี้ไม่สามารถย้อนกลับได้`,
-      { parse_mode: 'HTML', reply_markup: { inline_keyboard: [
-        [
-          { text: '✅ ลบเลย', callback_data: `boss_delete_do_${bossId}` },
-          { text: '❌ ยกเลิก', callback_data: `boss_detail_${bossId}` }
-        ]
-      ]}}
-    );
-  }
-  if (data.startsWith('boss_delete_do_')) {
-    const bossId = data.replace('boss_delete_do_', '');
-    await deleteBoss(bossId);
-    bot.sendMessage(chatId, `✅ <b>ลบบอสสำเร็จ</b>`, { parse_mode: 'HTML' });
-    return sendBossList(chatId);
-  }
-
-  // ── Boss: Manual Spawn (ยืนยันแล้ว) ──
-  if (data.startsWith('boss_spawn_do_')) {
-    const bossId = data.replace('boss_spawn_do_', '');
-    const boss = await getBossById(bossId);
-    if (!boss) return bot.sendMessage(chatId, '❌ ไม่พบบอสนี้แล้ว');
-    try {
-      const sentMsg = await spawnBoss(bot, boss, tgQueue);
-      // จำ messageId ไว้ลบปุ่มทีหลัง
-      activeBossMessages.set(`${boss.targetGroupId}_${bossId}`, sentMsg.message_id);
-      bot.sendMessage(chatId, `✅ <b>เสกบอส "${boss.name}" สำเร็จ!</b>`,
-        { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⬅️ กลับ Boss Panel', callback_data: 'menu_boss' }]] } }
-      );
-    } catch (e) {
-      bot.sendMessage(chatId, `❌ <b>เสกบอสล้มเหลว:</b> <code>${e.message}</code>`, { parse_mode: 'HTML' });
-    }
-    return;
-  }
-
-  // ── Boss: Attack (ผู้เล่นกดปุ่มโจมตีบอส) ──
-  if (data.startsWith('boss_attack_')) {
-    const bossId = data.replace('boss_attack_', '');
-    const boss = await getBossById(bossId);
-    if (!boss) {
-      return bot.answerCallbackQuery(query.id, { text: '💨 บอสหนีไปแล้ว!', show_alert: true });
-    }
-
-    const attackerId = query.from.id;
-    const attackerName = `${query.from.first_name || ''} ${query.from.last_name || ''}`.trim() || query.from.username || `ID:${attackerId}`;
-    const attackerUsername = query.from.username || '';
-
-    try {
-      // บันทึกการล่า
-      await recordKill(attackerId, boss.targetGroupId, boss.name, attackerUsername, attackerName);
-
-      // แจกฉายา
-      await awardTag(token, boss.targetGroupId, attackerId, attackerUsername, attackerName, boss.rewardTag, boss.tagDurationHours);
-
-      // แก้ไขข้อความบอสให้แสดงว่าถูกล่าแล้ว (ลบปุ่มออก)
-      const msgKey = `${boss.targetGroupId}_${bossId}`;
-      const bossMessageId = activeBossMessages.get(msgKey);
-      if (bossMessageId) {
-        tgQueue.add(() =>
-          bot.editMessageCaption(
-            `⚔️ <b>[ บอสถูกล่าแล้ว! ]</b>\n━━━━━━━━━━━━━━━━━━━━\n👾 <b>${boss.name}</b>\n💀 ถูกสังหารโดย: <a href="tg://user?id=${attackerId}">${attackerName}</a>\n🏆 ได้รับฉายา: <b>${boss.rewardTag}</b>\n━━━━━━━━━━━━━━━━━━━━`,
-            { chat_id: boss.targetGroupId, message_id: bossMessageId, parse_mode: 'HTML' }
-          )
-        ).catch(() => {});
-        activeBossMessages.delete(msgKey);
-      }
-
-      const durText = boss.tagDurationHours === 0 ? 'ถาวร' : `${boss.tagDurationHours} ชั่วโมง`;
-      bot.answerCallbackQuery(query.id, {
-        text: `🎉 คุณได้รับฉายา "${boss.rewardTag}" (${durText})!`,
-        show_alert: true
-      });
-
-    } catch (e) {
-      bot.answerCallbackQuery(query.id, {
-        text: `⚠️ เกิดข้อผิดพลาด: ${e.message}`,
-        show_alert: true
-      });
-    }
-    return;
-  }
-
-  // ── Boss: Edit Field ──
-  if (data.startsWith('boss_edit_')) {
-    const parts = data.replace('boss_edit_', '').split('_');
-    // format: boss_edit_{bossId}_{field} — field อาจมี _ ใน bossId (ObjectId ไม่มี แต่ป้องกันไว้)
-    const field = parts[parts.length - 1];
-    const bossId = parts.slice(0, -1).join('_');
-
-    const fieldLabels = {
-      name: 'ชื่อบอส',
-      hp: 'HP (ตัวเลข)',
-      imageUrl: 'URL รูปภาพ',
-      spawnRate: '% โอกาสเกิด (0-100)',
-      rewardTag: 'ฉายารางวัล',
-      tagDurationHours: 'อายุฉายา (ชั่วโมง, 0=ถาวร)'
-    };
-
-    bossEditSessions.set(query.from.id, { action: 'edit_boss', bossId, field, chatId });
-    return bot.sendMessage(chatId,
-      `✏️ <b>แก้ไข: ${fieldLabels[field] || field}</b>\nพิมพ์ค่าใหม่:`,
-      { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '❌ ยกเลิก', callback_data: `boss_detail_${bossId}` }]] } }
-    );
-  }
 
   // ── Toggle Switches ──
   if (data.startsWith('toggle_storyban_')) {
@@ -1010,9 +871,6 @@ bot.on('message', async (msg) => {
   // 🛡️ [AUTO DEFENSE] ทำงานเฉพาะในกลุ่มเป้าหมาย ไม่ใช่ Whitelist
   if (isTargetGroup && currentSector && !globalWhitelist.includes(msg.from.id)) {
 
-    // นับข้อความสำหรับ Message-based Auto Spawn
-    incrementMessageCounter(bot, tgQueue).catch(() => {});
-
     // 1. STORY BAN
     if (currentSector.settings.storyBanActive &&
         (msg.forward_from_chat || msg.forward_from || msg.story || msg.forward_date)) {
@@ -1050,56 +908,7 @@ bot.on('message', async (msg) => {
   if (msg.text && msg.text.startsWith('/start')) return;
 
   const session = monitorSessions.get(msg.from.id);
-  if (!session) {
-    // ── ตรวจ Boss Edit Session ──
-    const bossSession = bossEditSessions.get(msg.from.id);
-    if (bossSession && msg.text) {
-      bossEditSessions.delete(msg.from.id);
-      bot.deleteMessage(msg.chat.id, msg.message_id).catch(() => {});
-
-      const { action, chatId: bChatId, bossId, field } = bossSession;
-
-      if (action === 'edit_boss') {
-        // แปลงค่าตามประเภท field
-        let value = msg.text.trim();
-        if (['hp', 'spawnRate', 'tagDurationHours'].includes(field)) {
-          value = parseInt(value);
-          if (isNaN(value)) {
-            return bot.sendMessage(bChatId, `❌ ต้องเป็นตัวเลขเท่านั้น`);
-          }
-          // ตรวจ range
-          if (field === 'spawnRate') value = Math.min(100, Math.max(0, value));
-          if (field === 'tagDurationHours') value = Math.max(0, value);
-          if (field === 'hp') value = Math.max(1, value);
-        }
-        await updateBoss(bossId, { [field]: value });
-        bot.sendMessage(bChatId, `✅ <b>อัปเดตสำเร็จ!</b>`, { parse_mode: 'HTML' });
-        return sendBossDetail(bChatId, bossId);
-      }
-
-      if (action === 'set_interval') {
-        const num = parseInt(msg.text.trim());
-        if (isNaN(num) || num < 1) {
-          return bot.sendMessage(bChatId, `❌ ต้องเป็นตัวเลขมากกว่า 0`);
-        }
-        const settings = await getSpawnSettings();
-        if (settings.spawnMode === 'time') {
-          await saveSpawnSettings({ spawnIntervalMinutes: num });
-          bot.sendMessage(bChatId, `✅ <b>ตั้งค่า Auto Spawn ทุก ${num} นาที</b>`, { parse_mode: 'HTML' });
-        } else {
-          await saveSpawnSettings({ spawnEveryNMessages: num });
-          bot.sendMessage(bChatId, `✅ <b>ตั้งค่า Auto Spawn ทุก ${num} ข้อความ</b>`, { parse_mode: 'HTML' });
-        }
-        return sendSpawnModeMenu(bChatId);
-      }
-
-      if (action === 'create_boss') {
-        // รับ input ทีละ field ผ่าน multi-step
-        return handleBossCreateInput(bChatId, msg.from.id, bossSession, msg.text.trim());
-      }
-    }
-    return;
-  }
+  if (!session) return;
 
   const { chatId, groupId, action, promptMsgId } = session;
   const targetGroupId = parseInt(groupId);
@@ -1529,99 +1338,6 @@ bot.on('message', async (msg) => {
       bot.sendMessage(chatId, `✅ รับคำสั่ง ${action} สำเร็จ`, { reply_markup: finishMenu });
   }
 });
-
-// ==========================================
-// 👾 Boss Create — Multi-step form
-// ==========================================
-const bossCreateSteps = ['name', 'hp', 'imageUrl', 'targetGroupId', 'spawnRate', 'rewardTag', 'tagDurationHours'];
-const bossCreateLabels = {
-  name: '📛 ชื่อบอส',
-  hp: '❤️ HP (ตัวเลข เช่น 10000)',
-  imageUrl: '🖼️ URL รูปภาพ (หรือพิมพ์ - เพื่อข้าม)',
-  targetGroupId: `🛰️ เลือกกลุ่มเป้าหมาย (พิมพ์ ID หรือชื่อ):\n${TARGET_GROUPS.map((g, i) => `${i + 1}. ${g.name} → <code>${g.id}</code>`).join('\n')}`,
-  spawnRate: '🎲 % โอกาสเกิด (0-100)',
-  rewardTag: '🏆 ฉายารางวัลสำหรับผู้ที่ล่า',
-  tagDurationHours: '⏳ อายุฉายา (ชั่วโมง, พิมพ์ 0 = ถาวร)'
-};
-
-function startBossCreate(chatId, userId) {
-  bossEditSessions.set(userId, {
-    action: 'create_boss',
-    chatId,
-    step: 0,
-    data: {}
-  });
-  bot.sendMessage(chatId,
-    `➕ <b>สร้างบอสใหม่</b>\n━━━━━━━━━━━━━━━━━━━━\n\n${bossCreateLabels['name']}:`,
-    { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '❌ ยกเลิก', callback_data: 'boss_list' }]] } }
-  );
-}
-
-async function handleBossCreateInput(chatId, userId, session, input) {
-  const step = session.step;
-  const field = bossCreateSteps[step];
-
-  // แปลงค่าตามประเภท
-  let value = input;
-  if (field === 'hp' || field === 'spawnRate' || field === 'tagDurationHours') {
-    value = parseInt(input);
-    if (isNaN(value)) {
-      bossEditSessions.set(userId, session); // คืน session
-      return bot.sendMessage(chatId, `❌ ต้องเป็นตัวเลข ลองอีกครั้ง:`);
-    }
-  }
-  if (field === 'targetGroupId') {
-    value = parseInt(input);
-    if (isNaN(value)) {
-      // ลองหาจากชื่อ
-      const found = TARGET_GROUPS.find(g => g.name.toLowerCase().includes(input.toLowerCase()));
-      if (!found) {
-        bossEditSessions.set(userId, session);
-        return bot.sendMessage(chatId, `❌ ไม่พบกลุ่มนี้ ลองใหม่:`);
-      }
-      value = found.id;
-    }
-  }
-  if (field === 'imageUrl' && input === '-') value = null;
-
-  session.data[field] = value;
-  const nextStep = step + 1;
-
-  if (nextStep >= bossCreateSteps.length) {
-    // ครบทุก field → สร้างบอส
-    try {
-      const boss = await createBoss(session.data);
-      bot.sendMessage(chatId,
-        `✅ <b>สร้างบอส "${boss.name}" สำเร็จ!</b>`,
-        { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '📦 ดูคลังบอส', callback_data: 'boss_list' }]] } }
-      );
-    } catch (e) {
-      bot.sendMessage(chatId, `❌ สร้างบอสล้มเหลว: ${e.message}`);
-    }
-  } else {
-    // ไปขั้นตอนถัดไป
-    session.step = nextStep;
-    bossEditSessions.set(userId, session);
-    const nextField = bossCreateSteps[nextStep];
-    bot.sendMessage(chatId,
-      `${bossCreateLabels[nextField]}:`,
-      { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '❌ ยกเลิก', callback_data: 'boss_list' }]] } }
-    );
-  }
-}
-
-// ==========================================
-// ⏰ Cron Jobs — รันทุก 1 นาที
-// ==========================================
-setInterval(async () => {
-  // 1. ตรวจ Tag หมดอายุ → ลบอัตโนมัติ
-  await checkExpiredTags(token);
-
-  // 2. ตรวจ Auto Spawn แบบ time-based
-  await checkAutoSpawn(bot, tgQueue);
-}, 60 * 1000); // ทุก 60 วินาที
-
-console.log('⏰ Cron Jobs เริ่มทำงาน: Tag Expiry + Auto Spawn (ทุก 1 นาที)');
 
 // 🌐 Web Server ป้องกัน Render Sleep
 http.createServer((req, res) => res.end('ALIEN_STATION_ONLINE')).listen(process.env.PORT || 3000);
