@@ -304,12 +304,19 @@ bot.on('polling_error', (err) => {
   }
 });
 
-async function sendSystemLog(message, groupId = null) {
-  const groupKey = groupId ? groupId.toString() : null;
-  if (!groupKey) return; // ไม่มี groupId → ไม่ส่ง
-  const sectorLogChannel = sectorCache[groupKey]?.settings?.logChannelId;
-  if (!sectorLogChannel) return; // ไม่มีแชนแนลตั้งไว้ → ไม่ส่ง
-  bot.sendMessage(sectorLogChannel, message, { parse_mode: 'HTML' }).catch(() => {});
+async function sendSystemLog(message, groupIdOrChannelId = null) {
+  if (!groupIdOrChannelId) return;
+  const key = groupIdOrChannelId.toString();
+
+  // ถ้าค่าที่ส่งมาตรงกับ key ใน sectorCache → ใช้ logChannelId ของเซกเตอร์นั้น
+  if (sectorCache[key]) {
+    const sectorLogChannel = sectorCache[key]?.settings?.logChannelId;
+    if (!sectorLogChannel) return; // เซกเตอร์ไม่ได้ตั้ง Log Channel → ไม่ส่ง
+    bot.sendMessage(sectorLogChannel, message, { parse_mode: 'HTML' }).catch(() => {});
+  } else {
+    // ส่งตรงไปยัง channel ที่ระบุ (เช่น LOG_CHANNEL_ID สำหรับ global actions)
+    bot.sendMessage(groupIdOrChannelId, message, { parse_mode: 'HTML' }).catch(() => {});
+  }
 }
 
 // ==========================================
@@ -754,7 +761,7 @@ bot.on('message', async (msg) => {
       }
       sectorCache[sectorId.toString()] = config;
       bot.sendMessage(chatId, `✅ เพิ่มเซกเตอร์ <b>${sectorName}</b> สำเร็จ!`, { parse_mode: 'HTML', reply_markup: finishMenuSectors });
-      await sendSystemLog(`🛰️ <b>[ADD SECTOR]</b>\nเซกเตอร์: ${sectorName} (ID: <code>${sectorId}</code>)\nโดย: ${fullName} (<code>${msg.from.id}</code>)\n📅 เวลา: <code>${getThailandTimestamp()}</code>`);
+      await sendSystemLog(`🛰️ <b>[ADD SECTOR]</b>\nเซกเตอร์: ${sectorName} (ID: <code>${sectorId}</code>)\nโดย: ${fullName} (<code>${msg.from.id}</code>)\n📅 เวลา: <code>${getThailandTimestamp()}</code>`, LOG_CHANNEL_ID);
       break;
     }
 
@@ -767,7 +774,7 @@ bot.on('message', async (msg) => {
       TARGET_GROUPS = TARGET_GROUPS.filter(g => g.id !== sectorId);
       await saveGlobalConfig();
       bot.sendMessage(chatId, `✅ ลบเซกเตอร์ ID <code>${sectorId}</code> เรียบร้อยแล้ว`, { parse_mode: 'HTML', reply_markup: finishMenuSectors });
-      await sendSystemLog(`🛰️ <b>[DELETE SECTOR]</b>\nลบ ID: <code>${sectorId}</code>\nโดย: ${fullName} (<code>${msg.from.id}</code>)\n📅 เวลา: <code>${getThailandTimestamp()}</code>`);
+      await sendSystemLog(`🛰️ <b>[DELETE SECTOR]</b>\nลบ ID: <code>${sectorId}</code>\nโดย: ${fullName} (<code>${msg.from.id}</code>)\n📅 เวลา: <code>${getThailandTimestamp()}</code>`, LOG_CHANNEL_ID);
       break;
     }
 
@@ -823,7 +830,7 @@ bot.on('message', async (msg) => {
         await saveGlobalConfig();
       }
       bot.sendMessage(chatId, `✅ เพิ่ม <code>${newId}</code> เข้าสู่ Whitelist แล้ว`, { parse_mode: 'HTML', reply_markup: finishMenuWL });
-      await sendSystemLog(`👥 <b>[WHITELIST ADD]</b>\nเพิ่ม ID: <code>${newId}</code>\nโดย: ${fullName} (<code>${msg.from.id}</code>)\n📅 เวลา: <code>${getThailandTimestamp()}</code>`);
+      await sendSystemLog(`👥 <b>[WHITELIST ADD]</b>\nเพิ่ม ID: <code>${newId}</code>\nโดย: ${fullName} (<code>${msg.from.id}</code>)\n📅 เวลา: <code>${getThailandTimestamp()}</code>`, LOG_CHANNEL_ID);
       break;
     }
     case 'delwl': {
@@ -835,7 +842,7 @@ bot.on('message', async (msg) => {
       globalWhitelist = globalWhitelist.filter(id => id !== delId);
       await saveGlobalConfig();
       bot.sendMessage(chatId, `✅ ปลด <code>${delId}</code> ออกจาก Whitelist แล้ว`, { parse_mode: 'HTML', reply_markup: finishMenuWL });
-      await sendSystemLog(`👥 <b>[WHITELIST REMOVE]</b>\nลบ ID: <code>${delId}</code>\nโดย: ${fullName} (<code>${msg.from.id}</code>)\n📅 เวลา: <code>${getThailandTimestamp()}</code>`);
+      await sendSystemLog(`👥 <b>[WHITELIST REMOVE]</b>\nลบ ID: <code>${delId}</code>\nโดย: ${fullName} (<code>${msg.from.id}</code>)\n📅 เวลา: <code>${getThailandTimestamp()}</code>`, LOG_CHANNEL_ID);
       break;
     }
 
@@ -843,23 +850,28 @@ bot.on('message', async (msg) => {
     case 'addnotify': {
       const targetId = parseInt(inputStr);
       if (isNaN(targetId)) {
-        bot.sendMessage(chatId, `❌ ID ต้องเป็นตัวเลขเท่านั้น`, { parse_mode: 'HTML', reply_markup: finishMenuWL });
+        bot.sendMessage(chatId, `❌ ID ต้องเป็นตัวเลขเท่านั้น (ตัวอย่างกลุ่ม: <code>-100123456789</code>)`, { parse_mode: 'HTML', reply_markup: finishMenuWL });
         break;
       }
       if (notifyUserIds.includes(targetId)) {
-        bot.sendMessage(chatId, `❌ มี ID นี้ในรายการแจ้งเตือนอยู่แล้ว`, { parse_mode: 'HTML', reply_markup: finishMenuWL });
+        bot.sendMessage(chatId, `❌ มี ID <code>${targetId}</code> ในรายการแจ้งเตือนอยู่แล้ว`, { parse_mode: 'HTML', reply_markup: finishMenuWL });
         break;
       }
       notifyUserIds.push(targetId);
       await saveGlobalConfig();
-      bot.sendMessage(chatId, `✅ เพิ่ม ID <code>${targetId}</code> เข้าสู่ระบบแจ้งสถานะแล้ว`, { parse_mode: 'HTML', reply_markup: finishMenuWL });
+      const isGroup = targetId < 0;
+      bot.sendMessage(chatId, `✅ เพิ่ม${isGroup ? 'กลุ่ม' : 'ผู้ใช้'} ID <code>${targetId}</code> เข้าสู่ระบบแจ้งสถานะแล้ว`, { parse_mode: 'HTML', reply_markup: finishMenuWL });
       break;
     }
 
     case 'delnotify': {
       const targetId = parseInt(inputStr);
       if (isNaN(targetId)) {
-        bot.sendMessage(chatId, `❌ ID ต้องเป็นตัวเลขเท่านั้น`, { parse_mode: 'HTML', reply_markup: finishMenuWL });
+        bot.sendMessage(chatId, `❌ ID ต้องเป็นตัวเลขเท่านั้น (ตัวอย่างกลุ่ม: <code>-100123456789</code>)`, { parse_mode: 'HTML', reply_markup: finishMenuWL });
+        break;
+      }
+      if (!notifyUserIds.includes(targetId)) {
+        bot.sendMessage(chatId, `❌ ไม่พบ ID <code>${targetId}</code> ในรายการแจ้งเตือน`, { parse_mode: 'HTML', reply_markup: finishMenuWL });
         break;
       }
       notifyUserIds = notifyUserIds.filter(id => id !== targetId);
@@ -965,17 +977,6 @@ bot.on('message', async (msg) => {
       } catch (e) {
         bot.sendMessage(chatId, `❌ <b>ยิงสัญญาณล้มเหลว:</b> <code>${e.message}</code>`, { parse_mode: 'HTML', reply_markup: finishMenu });
       }
-      break;
-    }
-
-    case 'quickjump': {
-      bot.sendMessage(chatId, `✅ <b>สร้างทางลัดสำเร็จ!</b>`, {
-        parse_mode: 'HTML',
-        reply_markup: { inline_keyboard: [
-          [{ text: '🚀 พุ่งกระโดดไปยังพิกัด', url: inputStr }],
-          [{ text: '⬅️ กลับสู่เมนูเซกเตอร์', callback_data: `select_group_${groupId}` }]
-        ]}
-      });
       break;
     }
 
