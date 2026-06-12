@@ -14,6 +14,7 @@ const BossSchema = new mongoose.Schema({
   rewardTag:     { type: String, default: '👑 นักล่าบอส' }, // ฉายาที่ได้เมื่อฆ่า
   tagDurationHours: { type: Number, default: 24 },       // อายุฉายา (ชั่วโมง, 0 = ถาวร)
   isActive:      { type: Boolean, default: true },       // เปิด/ปิดใช้งานในระบบสุ่ม
+  maxDmgPct:    { type: Number, default: 5 },           // % HP สูงสุดต่อการตี 1 ครั้ง (ต่อคน)
 }, { timestamps: true });
 
 const Boss = mongoose.model('Boss', BossSchema);
@@ -104,14 +105,16 @@ async function spawnBoss(bot, boss, tgQueue) {
   try {
     // ถ้ามีรูป → ส่งรูปพร้อม caption
     // ถ้าไม่มีรูป → ส่งเป็นข้อความเท่านั้น
+    const hpBar = '🟥'.repeat(10); // เต็ม 100% ตอน spawn
     const caption =
       `⚔️ <b>[ บอสปรากฏตัว! ]</b>\n` +
       `━━━━━━━━━━━━━━━━━━━━\n` +
       `👾 <b>${boss.name}</b>\n` +
-      `❤️ HP: <b>${boss.hp.toLocaleString()}</b>\n` +
+      `❤️ <b>${boss.hp.toLocaleString()}</b> / ${boss.hp.toLocaleString()} HP  (-0%)\n` +
+      `${hpBar}\n` +
       `🏆 รางวัล: <b>${boss.rewardTag}</b>\n` +
       `━━━━━━━━━━━━━━━━━━━━\n` +
-      `⚡️ ใครกดปุ่มก่อน... ได้ฉายา!`;
+      `⚡️ กดเพื่อโจมตี! (ตีได้สูงสุด ${boss.maxDmgPct || 5}%/ครั้ง)`;
 
     // สร้างปุ่ม "ล่าบอส" inline
     const keyboard = {
