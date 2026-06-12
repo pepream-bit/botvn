@@ -30,47 +30,94 @@ const Player = mongoose.model('Player', PlayerSchema);
 // 📌 ฟังก์ชันหลัก: แจกฉายาให้ผู้เล่น
 // ──────────────────────────────────────────
 async function setChatMemberTag(botToken, chatId, userId, tag) {
-  // เรียก Telegram Bot API ตรงๆ เพราะ library ยังไม่รองรับ method นี้
-  const url = `https://api.telegram.org/bot${botToken}/setChatMemberCustomTitle`;
-  const res = await fetch(url, {
+  const baseUrl = `https://api.telegram.org/bot${botToken}`;
+
+  // ── ขั้น 1: promote เป็น admin (สิทธิ์ทุกอย่าง false = แค่ได้ฉายา) ──
+  // Telegram บังคับ: setChatAdministratorCustomTitle ใช้ได้เฉพาะ admin เท่านั้น
+  const promoteRes = await fetch(`${baseUrl}/promoteChatMember`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      chat_id: chatId,
-      user_id: userId,
+      chat_id:               chatId,
+      user_id:               userId,
+      is_anonymous:          false,
+      can_manage_chat:       false,
+      can_post_messages:     false,
+      can_edit_messages:     false,
+      can_delete_messages:   false,
+      can_manage_video_chats: false,
+      can_restrict_members:  false,
+      can_promote_members:   false,
+      can_change_info:       false,
+      can_invite_users:      false,
+      can_pin_messages:      false,
+    })
+  });
+  const promoteData = await promoteRes.json();
+  if (!promoteData.ok) {
+    throw new Error('promoteChatMember: ' + promoteData.description);
+  }
+
+  // ── ขั้น 2: ตั้ง custom title ──
+  const titleRes = await fetch(`${baseUrl}/setChatAdministratorCustomTitle`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      chat_id:      chatId,
+      user_id:      userId,
       custom_title: tag
     })
   });
-  const data = await res.json();
-  if (!data.ok) {
-    // โยน error ออกไปให้ caller จัดการ
-    throw new Error(`Telegram API Error: ${data.description}`);
+  const titleData = await titleRes.json();
+  if (!titleData.ok) {
+    throw new Error('setChatAdministratorCustomTitle: ' + titleData.description);
   }
-  return data;
+  return titleData;
 }
-
 // ──────────────────────────────────────────
 // 📌 ฟังก์ชัน: ลบฉายาออก (ตั้งเป็นสตริงว่าง)
 // ──────────────────────────────────────────
 async function removeChatMemberTag(botToken, chatId, userId) {
-  const url = `https://api.telegram.org/bot${botToken}/setChatMemberCustomTitle`;
-  const res = await fetch(url, {
+  const baseUrl = `https://api.telegram.org/bot${botToken}`;
+
+  // ── ขั้น 1: ลบ custom title (ตั้งเป็นสตริงว่าง) ──
+  const titleRes = await fetch(`${baseUrl}/setChatAdministratorCustomTitle`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ chat_id: chatId, user_id: userId, custom_title: '' })
+  });
+  const titleData = await titleRes.json();
+  if (!titleData.ok) {
+    console.warn(`⚠️ [TagController] ลบ title ไม่สำเร็จ user:${userId} → ${titleData.description}`);
+  }
+
+  // ── ขั้น 2: demote กลับเป็น member ธรรมดา ──
+  const demoteRes = await fetch(`${baseUrl}/promoteChatMember`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      chat_id: chatId,
-      user_id: userId,
-      custom_title: ''   // ตั้งเป็นว่างเพื่อลบฉายา
+      chat_id:               chatId,
+      user_id:               userId,
+      is_anonymous:          false,
+      can_manage_chat:       false,
+      can_post_messages:     false,
+      can_edit_messages:     false,
+      can_delete_messages:   false,
+      can_manage_video_chats: false,
+      can_restrict_members:  false,
+      can_promote_members:   false,
+      can_change_info:       false,
+      can_invite_users:      false,
+      can_pin_messages:      false,
     })
   });
-  const data = await res.json();
-  // ไม่ throw ถ้าลบไม่ได้ (เช่น user ออกกลุ่มไปแล้ว) — แค่ log
-  if (!data.ok) {
-    console.warn(`⚠️ [TagController] ลบ tag ไม่สำเร็จ user:${userId} → ${data.description}`);
+  const demoteData = await demoteRes.json();
+  if (!demoteData.ok) {
+    console.warn(`⚠️ [TagController] demote ไม่สำเร็จ user:${userId} → ${demoteData.description}`);
   }
-  return data.ok;
-}
 
+  return titleData.ok;
+}
 // ──────────────────────────────────────────
 // 📌 ฟังก์ชัน: บันทึก + แจกฉายาในคราวเดียว
 // ──────────────────────────────────────────
