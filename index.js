@@ -470,6 +470,7 @@ function sendGroupMenu(chatId, groupId) {
     [{ text: '🛡️ ลงทัณฑ์ (Security)', callback_data: `menu_sec_${groupId}` }],
     [{ text: '🕵️ คัดกรองชื่อ (Name Filter)', callback_data: `menu_namefilter_${groupId}` }],
     [{ text: '📡 สื่อสาร (Comms)', callback_data: `menu_comms_${groupId}` }],
+    [{ text: '👾 ระบบบอส (Boss)', callback_data: `menu_boss_${groupId}` }],
     [{ text: '📜 แจ้งเตือน Log (Log Config)', callback_data: `menu_log_${groupId}` }],
     [{ text: '⚙️ ตั้งค่า (Settings)', callback_data: `menu_set_${groupId}` }],
     [{ text: '⬅️ กลับหน้าจอหลัก', callback_data: 'back_to_main' }]
@@ -477,6 +478,52 @@ function sendGroupMenu(chatId, groupId) {
   bot.sendMessage(chatId, `🛰️ <b>เซกเตอร์:</b> <code>${group.name}</code>\nเลือกระบบปฏิบัติการ:`, {
     parse_mode: 'HTML', reply_markup: { inline_keyboard: submenu }
   });
+}
+
+
+// ──────────────────────────────────────────────────────────
+// 👾 Boss Menu — (Whitelist เท่านั้น)
+// ──────────────────────────────────────────────────────────
+async function sendBossMenu(chatId, groupId) {
+  const { getAllBosses, getSpawnSettings } = require('./bossController');
+  const group = TARGET_GROUPS.find(g => g.id == groupId);
+  const bosses = await getAllBosses();
+  const groupBosses = bosses.filter(b => String(b.targetGroupId) === String(groupId));
+  const settings = await getSpawnSettings();
+  const autoOn = settings.autoSpawnActive;
+  const modeLabel = settings.spawnMode === 'time'
+    ? `⏰ ทุก ${settings.spawnIntervalMinutes} นาที`
+    : `💬 ทุก ${settings.spawnEveryNMessages} ข้อความ`;
+
+  const bossList = groupBosses.length > 0
+    ? groupBosses.map((b, i) =>
+        `${i + 1}. ${b.isActive ? '🟢' : '🔴'} <b>${b.name}</b>  ❤️${b.hp.toLocaleString()}  HP  |  🏆${b.rewardTag}`
+      ).join('\n')
+    : '<i>ยังไม่มีบอสในเซกเตอร์นี้</i>';
+
+  const keyboard = [
+    [
+      { text: '➕ เพิ่มบอส', callback_data: `opt_addboss_${groupId}` },
+      { text: '➖ ลบบอส', callback_data: `opt_delboss_${groupId}` }
+    ],
+    [{ text: '⚔️ เสกบอสทันที (Manual Spawn)', callback_data: `opt_spawnboss_${groupId}` }],
+    [{ text: autoOn ? '🟢 Auto Spawn: ON' : '🔴 Auto Spawn: OFF', callback_data: `toggle_autospawn_${groupId}` }],
+    [
+      { text: settings.spawnMode === 'time' ? '✅ โหมด: เวลา' : '⬜ โหมด: เวลา', callback_data: `toggle_spawnmode_time_${groupId}` },
+      { text: settings.spawnMode === 'message' ? '✅ โหมด: ข้อความ' : '⬜ โหมด: ข้อความ', callback_data: `toggle_spawnmode_msg_${groupId}` }
+    ],
+    [{ text: `⏱️ ตั้งค่า (${modeLabel})`, callback_data: `opt_spawnconfig_${groupId}` }],
+    [{ text: '⬅️ ย้อนกลับ', callback_data: `select_group_${groupId}` }]
+  ];
+
+  bot.sendMessage(chatId,
+    `👾 <b>ระบบบอส — เซกเตอร์: ${group?.name}</b>\n` +
+    `━━━━━━━━━━━━━━━━━━━━\n` +
+    `${bossList}\n` +
+    `━━━━━━━━━━━━━━━━━━━━\n` +
+    `🤖 Auto Spawn: <b>${autoOn ? 'เปิด' : 'ปิด'}</b>  |  ${modeLabel}`,
+    { parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard } }
+  );
 }
 
 function sendLogMenu(chatId, groupId) {
@@ -737,6 +784,7 @@ bot.on('callback_query', async (query) => {
   if (data.startsWith('menu_namefilter_')) return sendNameFilterMenu(chatId, data.replace('menu_namefilter_', ''));
   if (data.startsWith('menu_comms_')) return sendCommsMenu(chatId, data.replace('menu_comms_', ''));
   if (data.startsWith('menu_set_')) return sendSettingsMenu(chatId, data.replace('menu_set_', ''));
+  if (data.startsWith('menu_boss_')) return sendBossMenu(chatId, data.replace('menu_boss_', ''));
 
   // ── Toggle Switches ──
   if (data.startsWith('toggle_storyban_')) {
@@ -777,7 +825,27 @@ bot.on('callback_query', async (query) => {
     bot.answerCallbackQuery(query.id, { text: `🔧 กำลังทยอยส่ง 'ปิดปรับปรุง' ไปยัง ${notifyUserIds.length} ID...`, show_alert: false });
     return;
   }
-  if (data.startsWith('toggle_logstory_')) {
+  // ── Boss Toggles ──
+  if (data.startsWith('toggle_autospawn_')) {
+    const { getSpawnSettings, saveSpawnSettings } = require('./bossController');
+    const groupId = data.replace('toggle_autospawn_', '');
+    const settings = await getSpawnSettings();
+    await saveSpawnSettings({ autoSpawnActive: !settings.autoSpawnActive });
+    return sendBossMenu(chatId, groupId);
+  }
+  if (data.startsWith('toggle_spawnmode_time_')) {
+    const { saveSpawnSettings } = require('./bossController');
+    const groupId = data.replace('toggle_spawnmode_time_', '');
+    await saveSpawnSettings({ spawnMode: 'time' });
+    return sendBossMenu(chatId, groupId);
+  }
+  if (data.startsWith('toggle_spawnmode_msg_')) {
+    const { saveSpawnSettings } = require('./bossController');
+    const groupId = data.replace('toggle_spawnmode_msg_', '');
+    await saveSpawnSettings({ spawnMode: 'message' });
+    return sendBossMenu(chatId, groupId);
+  }
+    if (data.startsWith('toggle_logstory_')) {
     const groupId = data.replace('toggle_logstory_', '');
     sectorCache[groupId].settings.storyBanLogActive = !sectorCache[groupId].settings.storyBanLogActive;
     await saveSectorData(groupId);
@@ -820,6 +888,7 @@ bot.on('callback_query', async (query) => {
     if (action.includes('sector')) backTarget = 'menu_sectors';
     if (action.includes('logch')) backTarget = `menu_log_${groupId}`;
     if (action.includes('notify')) backTarget = 'menu_whitelist';
+    if (['addboss','delboss','spawnboss','spawnconfig'].includes(action)) backTarget = `menu_boss_${groupId}`;
 
     const cancelMenu = { inline_keyboard: [[{ text: '❌ ยกเลิกและกลับ', callback_data: backTarget }]] };
 
@@ -842,7 +911,11 @@ bot.on('callback_query', async (query) => {
     if (action === 'addsector') promptMsg = `➕ <b>[เพิ่มเซกเตอร์]</b>\nพิมพ์ <b>ข้อมูลเซกเตอร์</b> (รูปแบบ: <code>IDกลุ่ม:ชื่อกลุ่ม</code>)\nตัวอย่าง: <code>-10012345678:ดาวอังคาร</code>`;
     if (action === 'delsector') promptMsg = `➖ <b>[ลบเซกเตอร์]</b>\nพิมพ์ <b>ID ตัวเลข</b> ของเซกเตอร์ที่ต้องการลบ\n(เช่น: <code>-10012345678</code>):`;
     if (action === 'setlogch')  promptMsg = `➕ <b>[ตั้งพิกัด Log Channel]</b>\nพิมพ์ <b>ID ตัวเลข</b> ของ Telegram Channel ที่ต้องการรับ Log ของกลุ่มนี้\n(ตัวอย่าง: <code>-100123456789</code>):`;
-    if (action === 'dellogch')  promptMsg = `➖ <b>[ลบพิกัด Log Channel]</b>\nพิมพ์คำว่า <code>ยืนยัน</code> เพื่อลบพิกัด Channel เฉพาะของเซกเตอร์นี้\n(บอทจะกลับไปใช้แชนแนลกลางจาก .env แทน):`;
+    if (action === 'addboss')    promptMsg = `➕ <b>[เพิ่มบอสใหม่]</b>\nรูปแบบ (คั่นด้วย |):\n<code>ชื่อบอส|HP|rewardTag|ชั่วโมงฉายา|spawnRate%</code>\nตัวอย่าง: <code>Dragon|50000|🐉 นักล่ามังกร|24|60</code>\nถ้าไม่ใส่ค่า ใช้ค่าตั้งต้น (HP=10000, Tag=👑 นักล่าบอส, 24ชม, 50%)`;
+    if (action === 'delboss')    promptMsg = `➖ <b>[ลบบอส]</b>\nพิมพ์ <b>ชื่อบอส</b> ที่ต้องการลบออกจากคลัง:`;
+    if (action === 'spawnboss')  promptMsg = `⚔️ <b>[เสกบอสทันที]</b>\nพิมพ์ <b>ชื่อบอส</b> ที่ต้องการเสกลงกลุ่ม (ต้องมีในคลังแล้ว):`;
+    if (action === 'spawnconfig') promptMsg = `⏱️ <b>[ตั้งค่า Spawn Interval]</b>\nโหมด time → พิมพ์จำนวน <b>นาที</b>\nโหมด message → พิมพ์จำนวน <b>ข้อความ</b>\nตัวอย่าง: <code>60</code>`;
+        if (action === 'dellogch')  promptMsg = `➖ <b>[ลบพิกัด Log Channel]</b>\nพิมพ์คำว่า <code>ยืนยัน</code> เพื่อลบพิกัด Channel เฉพาะของเซกเตอร์นี้\n(บอทจะกลับไปใช้แชนแนลกลางจาก .env แทน):`;
 
     bot.sendMessage(chatId, promptMsg, { parse_mode: 'HTML', reply_markup: cancelMenu })
       .then(sentMsg => {
@@ -930,6 +1003,83 @@ bot.on('message', async (msg) => {
   let targetInput, reason, spaceIdx, resolved, targetUserId, targetName;
 
   switch (action) {
+
+
+    // ── Boss Management ──
+    case 'addboss': {
+      const { createBoss } = require('./bossController');
+      const parts = inputStr.split('|').map(s => s.trim());
+      const bossName = parts[0];
+      if (!bossName) {
+        bot.sendMessage(chatId, '❌ ต้องระบุชื่อบอสอย่างน้อย', { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⬅️ กลับ', callback_data: `menu_boss_${groupId}` }]] } });
+        break;
+      }
+      try {
+        const boss = await createBoss({
+          name:            bossName,
+          hp:              parts[1] ? parseInt(parts[1]) : 10000,
+          rewardTag:       parts[2] || '👑 นักล่าบอส',
+          tagDurationHours: parts[3] ? parseInt(parts[3]) : 24,
+          spawnRate:       parts[4] ? parseInt(parts[4]) : 50,
+          targetGroupId:   parseInt(groupId),
+        });
+        bot.sendMessage(chatId,
+          `✅ <b>เพิ่มบอสสำเร็จ!</b>\n👾 ชื่อ: <b>${boss.name}</b>\n❤️ HP: ${boss.hp.toLocaleString()}\n🏆 Tag: ${boss.rewardTag}\n⏱️ อายุฉายา: ${boss.tagDurationHours}h\n🎲 Rate: ${boss.spawnRate}%`,
+          { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⬅️ กลับหน้าบอส', callback_data: `menu_boss_${groupId}` }]] } }
+        );
+      } catch (e) {
+        bot.sendMessage(chatId, `❌ สร้างบอสล้มเหลว: ${e.message}`, { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⬅️ กลับ', callback_data: `menu_boss_${groupId}` }]] } });
+      }
+      break;
+    }
+
+    case 'delboss': {
+      const { getAllBosses, deleteBoss } = require('./bossController');
+      const bosses = await getAllBosses();
+      const target = bosses.find(b => b.name.toLowerCase() === inputStr.toLowerCase() && String(b.targetGroupId) === String(groupId));
+      if (!target) {
+        bot.sendMessage(chatId, `❌ ไม่พบบอสชื่อ "<b>${inputStr}</b>" ในเซกเตอร์นี้`, { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⬅️ กลับ', callback_data: `menu_boss_${groupId}` }]] } });
+        break;
+      }
+      await deleteBoss(target._id);
+      bot.sendMessage(chatId, `✅ ลบบอส "<b>${target.name}</b>" เรียบร้อยแล้ว`, { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⬅️ กลับหน้าบอส', callback_data: `menu_boss_${groupId}` }]] } });
+      break;
+    }
+
+    case 'spawnboss': {
+      const { getAllBosses } = require('./bossController');
+      const bosses = await getAllBosses();
+      const target = bosses.find(b => b.name.toLowerCase() === inputStr.toLowerCase() && String(b.targetGroupId) === String(groupId));
+      if (!target) {
+        bot.sendMessage(chatId, `❌ ไม่พบบอสชื่อ "<b>${inputStr}</b>" ในเซกเตอร์นี้`, { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⬅️ กลับ', callback_data: `menu_boss_${groupId}` }]] } });
+        break;
+      }
+      try {
+        await spawnBoss(bot, target, tgQueue);
+        bot.sendMessage(chatId, `✅ เสก <b>${target.name}</b> ลงกลุ่มสำเร็จ!`, { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⬅️ กลับหน้าบอส', callback_data: `menu_boss_${groupId}` }]] } });
+      } catch (e) {
+        bot.sendMessage(chatId, `❌ Spawn ล้มเหลว: ${e.message}`, { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⬅️ กลับ', callback_data: `menu_boss_${groupId}` }]] } });
+      }
+      break;
+    }
+
+    case 'spawnconfig': {
+      const { getSpawnSettings, saveSpawnSettings } = require('./bossController');
+      const val = parseInt(inputStr);
+      if (isNaN(val) || val < 1) {
+        bot.sendMessage(chatId, '❌ ต้องเป็นตัวเลขจำนวนเต็มมากกว่า 0', { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⬅️ กลับ', callback_data: `menu_boss_${groupId}` }]] } });
+        break;
+      }
+      const settings = await getSpawnSettings();
+      if (settings.spawnMode === 'time') {
+        await saveSpawnSettings({ spawnIntervalMinutes: val });
+        bot.sendMessage(chatId, `✅ ตั้งค่า Auto Spawn ทุก <b>${val} นาที</b> สำเร็จ`, { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⬅️ กลับหน้าบอส', callback_data: `menu_boss_${groupId}` }]] } });
+      } else {
+        await saveSpawnSettings({ spawnEveryNMessages: val });
+        bot.sendMessage(chatId, `✅ ตั้งค่า Auto Spawn ทุก <b>${val} ข้อความ</b> สำเร็จ`, { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⬅️ กลับหน้าบอส', callback_data: `menu_boss_${groupId}` }]] } });
+      }
+      break;
+    }
 
     // ── Sector Management ──
     case 'addsector': {
