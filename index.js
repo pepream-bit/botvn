@@ -42,15 +42,17 @@ async function scheduleBossHpUpdate(bot, chatId, messageId, boss, currentHp) {
     const pct = Math.max(0, Math.round((latestHp / fight.maxHp) * 100));
     const bar = buildHpBar(latestHp, fight.maxHp);
 
+    // pct เหลืออยู่ (สำหรับ bar) และ pct ที่ลดไปแล้ว (สำหรับแสดง)
+    const lostPct = Math.round(((fight.maxHp - latestHp) / fight.maxHp) * 100);
     const newCaption =
       `⚔️ <b>[ บอสกำลังถูกโจมตี! ]</b>\n` +
       `━━━━━━━━━━━━━━━━━━━━\n` +
       `👾 <b>${boss.name}</b>\n` +
-      `❤️ HP: <b>${latestHp.toLocaleString()} / ${fight.maxHp.toLocaleString()}</b>\n` +
-      `${bar} ${pct}%\n` +
+      `❤️ <b>${latestHp.toLocaleString()}</b> / ${fight.maxHp.toLocaleString()} HP  (-${lostPct}%)\n` +
+      `${bar}\n` +
       `🏆 รางวัล: <b>${boss.rewardTag}</b>\n` +
       `━━━━━━━━━━━━━━━━━━━━\n` +
-      `⚡️ ใครกดปุ่มก่อน... ได้ฉายา!`;
+      `⚡️ กดเพื่อโจมตี! (ตีได้สูงสุด ${boss.maxDmgPct || 5}%/ครั้ง)`;
 
     const keyboard = {
       inline_keyboard: [[
@@ -512,7 +514,8 @@ async function sendBossMenu(chatId, groupId) {
       { text: settings.spawnMode === 'time' ? '✅ โหมด: เวลา' : '⬜ โหมด: เวลา', callback_data: `toggle_spawnmode_time_${groupId}` },
       { text: settings.spawnMode === 'message' ? '✅ โหมด: ข้อความ' : '⬜ โหมด: ข้อความ', callback_data: `toggle_spawnmode_msg_${groupId}` }
     ],
-    [{ text: `⏱️ ตั้งค่า (${modeLabel})`, callback_data: `opt_spawnconfig_${groupId}` }],
+    [{ text: `⏱️ ตั้งค่า Spawn (${modeLabel})`, callback_data: `opt_spawnconfig_${groupId}` }],
+    [{ text: '⚔️ ตั้งค่า Damage % ต่อตี', callback_data: `opt_bossdmg_${groupId}` }],
     [{ text: '⬅️ ย้อนกลับ', callback_data: `select_group_${groupId}` }]
   ];
 
@@ -681,8 +684,10 @@ bot.on('callback_query', async (query) => {
         return bot.answerCallbackQuery(query.id, { text: '💀 บอสตัวนี้ถูกกำจัดไปแล้ว!', show_alert: false });
       }
 
-      // คำนวณ damage (สุ่ม 1–10% ของ maxHp)
-      const dmg = Math.max(1, Math.floor(fight.maxHp * (0.01 + Math.random() * 0.09)));
+      // คำนวณ damage (สุ่ม 1% – maxDmgPct% ของ maxHp)
+      const maxPct = (boss.maxDmgPct || 5) / 100;
+      const minPct = Math.min(0.01, maxPct);
+      const dmg = Math.max(1, Math.floor(fight.maxHp * (minPct + Math.random() * (maxPct - minPct))));
       fight.hp = Math.max(0, fight.hp - dmg);
 
       if (fight.hp <= 0) {
@@ -888,7 +893,7 @@ bot.on('callback_query', async (query) => {
     if (action.includes('sector')) backTarget = 'menu_sectors';
     if (action.includes('logch')) backTarget = `menu_log_${groupId}`;
     if (action.includes('notify')) backTarget = 'menu_whitelist';
-    if (['addboss','delboss','spawnboss','spawnconfig'].includes(action)) backTarget = `menu_boss_${groupId}`;
+    if (['addboss','delboss','spawnboss','spawnconfig','bossdmg'].includes(action)) backTarget = `menu_boss_${groupId}`;
 
     const cancelMenu = { inline_keyboard: [[{ text: '❌ ยกเลิกและกลับ', callback_data: backTarget }]] };
 
@@ -911,9 +916,10 @@ bot.on('callback_query', async (query) => {
     if (action === 'addsector') promptMsg = `➕ <b>[เพิ่มเซกเตอร์]</b>\nพิมพ์ <b>ข้อมูลเซกเตอร์</b> (รูปแบบ: <code>IDกลุ่ม:ชื่อกลุ่ม</code>)\nตัวอย่าง: <code>-10012345678:ดาวอังคาร</code>`;
     if (action === 'delsector') promptMsg = `➖ <b>[ลบเซกเตอร์]</b>\nพิมพ์ <b>ID ตัวเลข</b> ของเซกเตอร์ที่ต้องการลบ\n(เช่น: <code>-10012345678</code>):`;
     if (action === 'setlogch')  promptMsg = `➕ <b>[ตั้งพิกัด Log Channel]</b>\nพิมพ์ <b>ID ตัวเลข</b> ของ Telegram Channel ที่ต้องการรับ Log ของกลุ่มนี้\n(ตัวอย่าง: <code>-100123456789</code>):`;
-    if (action === 'addboss')    promptMsg = `➕ <b>[เพิ่มบอสใหม่]</b>\nรูปแบบ (คั่นด้วย |):\n<code>ชื่อบอส|HP|rewardTag|ชั่วโมงฉายา|spawnRate%</code>\nตัวอย่าง: <code>Dragon|50000|🐉 นักล่ามังกร|24|60</code>\nถ้าไม่ใส่ค่า ใช้ค่าตั้งต้น (HP=10000, Tag=👑 นักล่าบอส, 24ชม, 50%)`;
+    if (action === 'addboss')    promptMsg = `➕ <b>[เพิ่มบอสใหม่]</b>\nรูปแบบ (คั่นด้วย |):\n<code>ชื่อ|HP|ฉายา|ชั่วโมงฉายา|spawnRate%|maxDmg%ต่อตี|URL_รูป</code>\nตัวอย่าง: <code>Dragon|50000|🐉 นักล่ามังกร|24|60|5|https://i.imgur.com/xxx.jpg</code>\n⚠️ URL รูปต้องเป็น https ตรง (jpg/png)\nถ้าไม่ใส่ค่า ใช้ค่าตั้งต้น (HP=10000, Tag=👑, 24ชม, 50%, Dmg=5%, ไม่มีรูป)`;
     if (action === 'delboss')    promptMsg = `➖ <b>[ลบบอส]</b>\nพิมพ์ <b>ชื่อบอส</b> ที่ต้องการลบออกจากคลัง:`;
     if (action === 'spawnboss')  promptMsg = `⚔️ <b>[เสกบอสทันที]</b>\nพิมพ์ <b>ชื่อบอส</b> ที่ต้องการเสกลงกลุ่ม (ต้องมีในคลังแล้ว):`;
+    if (action === 'bossdmg')    promptMsg = `⚔️ <b>[ตั้งค่า Damage % ต่อตี]</b>\nพิมพ์รูปแบบ: <code>ชื่อบอส|maxDmg%</code>\nตัวอย่าง: <code>Dragon|5</code>\n→ แต่ละคนตีได้สูงสุด 5% ต่อครั้ง (สุ่มระหว่าง 1%–maxDmg%)`;
     if (action === 'spawnconfig') promptMsg = `⏱️ <b>[ตั้งค่า Spawn Interval]</b>\nโหมด time → พิมพ์จำนวน <b>นาที</b>\nโหมด message → พิมพ์จำนวน <b>ข้อความ</b>\nตัวอย่าง: <code>60</code>`;
         if (action === 'dellogch')  promptMsg = `➖ <b>[ลบพิกัด Log Channel]</b>\nพิมพ์คำว่า <code>ยืนยัน</code> เพื่อลบพิกัด Channel เฉพาะของเซกเตอร์นี้\n(บอทจะกลับไปใช้แชนแนลกลางจาก .env แทน):`;
 
@@ -1015,16 +1021,19 @@ bot.on('message', async (msg) => {
         break;
       }
       try {
+        const rawUrl = parts[6] ? parts[6].trim() : null;
         const boss = await createBoss({
-          name:            bossName,
-          hp:              parts[1] ? parseInt(parts[1]) : 10000,
-          rewardTag:       parts[2] || '👑 นักล่าบอส',
+          name:             bossName,
+          hp:               parts[1] ? parseInt(parts[1]) : 10000,
+          rewardTag:        parts[2] || '👑 นักล่าบอส',
           tagDurationHours: parts[3] ? parseInt(parts[3]) : 24,
-          spawnRate:       parts[4] ? parseInt(parts[4]) : 50,
-          targetGroupId:   parseInt(groupId),
+          spawnRate:        parts[4] ? parseInt(parts[4]) : 50,
+          maxDmgPct:        parts[5] ? parseFloat(parts[5]) : 5,
+          imageUrl:         rawUrl || null,
+          targetGroupId:    parseInt(groupId),
         });
         bot.sendMessage(chatId,
-          `✅ <b>เพิ่มบอสสำเร็จ!</b>\n👾 ชื่อ: <b>${boss.name}</b>\n❤️ HP: ${boss.hp.toLocaleString()}\n🏆 Tag: ${boss.rewardTag}\n⏱️ อายุฉายา: ${boss.tagDurationHours}h\n🎲 Rate: ${boss.spawnRate}%`,
+          `✅ <b>เพิ่มบอสสำเร็จ!</b>\n👾 ชื่อ: <b>${boss.name}</b>\n❤️ HP: ${boss.hp.toLocaleString()}\n🏆 Tag: ${boss.rewardTag}\n⏱️ อายุฉายา: ${boss.tagDurationHours}h\n🎲 Rate: ${boss.spawnRate}%\n⚔️ Dmg สูงสุด: ${boss.maxDmgPct}%/ตี\n🖼️ รูป: ${boss.imageUrl ? '✅' : '❌ ไม่มี'}`,
           { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⬅️ กลับหน้าบอส', callback_data: `menu_boss_${groupId}` }]] } }
         );
       } catch (e) {
@@ -1060,6 +1069,36 @@ bot.on('message', async (msg) => {
       } catch (e) {
         bot.sendMessage(chatId, `❌ Spawn ล้มเหลว: ${e.message}`, { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⬅️ กลับ', callback_data: `menu_boss_${groupId}` }]] } });
       }
+      break;
+    }
+
+
+    case 'bossdmg': {
+      const { getAllBosses, updateBoss } = require('./bossController');
+      const parts = inputStr.split('|').map(s => s.trim());
+      const targetName = parts[0];
+      const newPct = parseFloat(parts[1]);
+      if (!targetName || isNaN(newPct) || newPct <= 0 || newPct > 100) {
+        bot.sendMessage(chatId, '❌ รูปแบบไม่ถูกต้อง หรือค่า % ต้องอยู่ระหว่าง 0.1–100', {
+          parse_mode: 'HTML',
+          reply_markup: { inline_keyboard: [[{ text: '⬅️ กลับ', callback_data: `menu_boss_${groupId}` }]] }
+        });
+        break;
+      }
+      const bosses = await getAllBosses();
+      const target = bosses.find(b => b.name.toLowerCase() === targetName.toLowerCase() && String(b.targetGroupId) === String(groupId));
+      if (!target) {
+        bot.sendMessage(chatId, `❌ ไม่พบบอสชื่อ "<b>${targetName}</b>" ในเซกเตอร์นี้`, {
+          parse_mode: 'HTML',
+          reply_markup: { inline_keyboard: [[{ text: '⬅️ กลับ', callback_data: `menu_boss_${groupId}` }]] }
+        });
+        break;
+      }
+      await updateBoss(target._id, { maxDmgPct: newPct });
+      bot.sendMessage(chatId,
+        `✅ อัปเดต Damage % สำเร็จ\n👾 บอส: <b>${target.name}</b>\n⚔️ แต่ละคนตีได้ <b>1%–${newPct}%</b> ต่อครั้ง`,
+        { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⬅️ กลับหน้าบอส', callback_data: `menu_boss_${groupId}` }]] } }
+      );
       break;
     }
 
