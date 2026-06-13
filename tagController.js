@@ -58,6 +58,9 @@ async function setChatMemberTag(botToken, chatId, userId, tag) {
     throw new Error('promoteChatMember: ' + promoteData.description);
   }
 
+  // ── รอให้ Telegram propagate สิทธิ์ admin ก่อน (race condition) ──
+  await new Promise(r => setTimeout(r, 500));
+
   // ── ขั้น 2: ตั้ง custom title ──
   const titleRes = await fetch(`${baseUrl}/setChatAdministratorCustomTitle`, {
     method: 'POST',
