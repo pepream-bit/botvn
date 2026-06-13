@@ -15,9 +15,20 @@ const BossSchema = new mongoose.Schema({
   tagDurationHours: { type: Number, default: 24 },       // อายุฉายา (ชั่วโมง, 0 = ถาวร)
   isActive:      { type: Boolean, default: true },       // เปิด/ปิดใช้งานในระบบสุ่ม
   maxDmgPct:    { type: Number, default: 5 },           // % HP สูงสุดต่อการตี 1 ครั้ง (ต่อคน)
+  rank:         { type: String, default: 'normal', enum: ['normal','rare','legend','mystic','limit'] },
 }, { timestamps: true });
 
 const Boss = mongoose.model('Boss', BossSchema);
+
+// ── ตารางระดับบอส ──
+const BOSS_RANK = {
+  normal:  { emoji: '⚪', label: 'Normal',  border: '─' },
+  rare:    { emoji: '🔵', label: 'Rare',    border: '═' },
+  legend:  { emoji: '🟡', label: 'Legend',  border: '━' },
+  mystic:  { emoji: '🟣', label: 'Mystic',  border: '▰' },
+  limit:   { emoji: '🔴', label: 'LIMIT',   border: '█' },
+};
+function getRank(rank) { return BOSS_RANK[rank] || BOSS_RANK.normal; }
 
 // ── Schema: การตั้งค่าระบบ Spawn ──
 const SpawnSettingsSchema = new mongoose.Schema({
@@ -105,15 +116,17 @@ async function spawnBoss(bot, boss, tgQueue) {
   try {
     // ถ้ามีรูป → ส่งรูปพร้อม caption
     // ถ้าไม่มีรูป → ส่งเป็นข้อความเท่านั้น
-    const hpBar = '🟥'.repeat(10); // เต็ม 100% ตอน spawn
+    const hpBar = '🟥'.repeat(10);
+    const r = getRank(boss.rank);
+    const line = r.border.repeat(20);
     const caption =
-      `⚔️ <b>[ บอสปรากฏตัว! ]</b>\n` +
-      `━━━━━━━━━━━━━━━━━━━━\n` +
+      `${r.emoji} <b>[ ${r.label} BOSS ปรากฏตัว! ]</b>\n` +
+      `${line}\n` +
       `👾 <b>${boss.name}</b>\n` +
       `❤️ <b>${boss.hp.toLocaleString()}</b> / ${boss.hp.toLocaleString()} HP  (-0%)\n` +
       `${hpBar}\n` +
       `🏆 รางวัล: <b>${boss.rewardTag}</b>\n` +
-      `━━━━━━━━━━━━━━━━━━━━\n` +
+      `${line}\n` +
       `⚡️ กดเพื่อโจมตี! (ตีได้สูงสุด ${boss.maxDmgPct || 5}%/ครั้ง)`;
 
     // สร้างปุ่ม "ล่าบอส" inline
@@ -124,20 +137,31 @@ async function spawnBoss(bot, boss, tgQueue) {
     };
 
     let sentMsg;
-    if (boss.imageUrl) {
+    if (boss.imageUrl && boss.imageUrl.startsWith('fileid:')) {
+      // รูปแบบ: fileid:type:file_id
+      const [, mediaType, fileId] = boss.imageUrl.split(':');
+      if (mediaType === 'animation') {
+        sentMsg = await tgQueue.add(() =>
+          bot.sendAnimation(chatId, fileId, { caption, parse_mode: 'HTML', reply_markup: keyboard })
+        );
+      } else if (mediaType === 'video') {
+        sentMsg = await tgQueue.add(() =>
+          bot.sendVideo(chatId, fileId, { caption, parse_mode: 'HTML', reply_markup: keyboard })
+        );
+      } else {
+        // photo (default)
+        sentMsg = await tgQueue.add(() =>
+          bot.sendPhoto(chatId, fileId, { caption, parse_mode: 'HTML', reply_markup: keyboard })
+        );
+      }
+    } else if (boss.imageUrl) {
+      // URL ธรรมดา (เดิม)
       sentMsg = await tgQueue.add(() =>
-        bot.sendPhoto(chatId, boss.imageUrl, {
-          caption,
-          parse_mode: 'HTML',
-          reply_markup: keyboard
-        })
+        bot.sendPhoto(chatId, boss.imageUrl, { caption, parse_mode: 'HTML', reply_markup: keyboard })
       );
     } else {
       sentMsg = await tgQueue.add(() =>
-        bot.sendMessage(chatId, caption, {
-          parse_mode: 'HTML',
-          reply_markup: keyboard
-        })
+        bot.sendMessage(chatId, caption, { parse_mode: 'HTML', reply_markup: keyboard })
       );
     }
 
@@ -214,6 +238,8 @@ async function incrementMessageCounter(bot, tgQueue) {
 }
 
 module.exports = {
+  BOSS_RANK,
+  getRank,
   Boss,
   SpawnSettings,
   createBoss,
