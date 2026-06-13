@@ -32,16 +32,16 @@ const Player = mongoose.model('Player', PlayerSchema);
 async function setChatMemberTag(botToken, chatId, userId, tag) {
   const baseUrl = `https://api.telegram.org/bot${botToken}`;
 
-  // ── ขั้น 1: promote เป็น admin (สิทธิ์ทุกอย่าง false = แค่ได้ฉายา) ──
-  // Telegram บังคับ: setChatAdministratorCustomTitle ใช้ได้เฉพาะ admin เท่านั้น
+  // ── ขั้น 1: promote เป็น admin ──
+  // ต้องส่ง can_manage_chat: true อย่างน้อย 1 field
+  // Telegram ถือว่า "all false" = ไม่ได้ promote เลย → setChatAdministratorCustomTitle จะ fail
   const promoteRes = await fetch(`${baseUrl}/promoteChatMember`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       chat_id:               chatId,
       user_id:               userId,
-      is_anonymous:          false,
-      can_manage_chat:       false,
+      can_manage_chat:       true,   // ← ต้องมี true อย่างน้อย 1 field
       can_post_messages:     false,
       can_edit_messages:     false,
       can_delete_messages:   false,
@@ -58,8 +58,8 @@ async function setChatMemberTag(botToken, chatId, userId, tag) {
     throw new Error('promoteChatMember: ' + promoteData.description);
   }
 
-  // ── รอให้ Telegram propagate สิทธิ์ admin ก่อน (race condition) ──
-  await new Promise(r => setTimeout(r, 500));
+  // ── รอให้ Telegram propagate สิทธิ์ก่อน ──
+  await new Promise(r => setTimeout(r, 800));
 
   // ── ขั้น 2: ตั้ง custom title ──
   const titleRes = await fetch(`${baseUrl}/setChatAdministratorCustomTitle`, {
@@ -94,14 +94,16 @@ async function removeChatMemberTag(botToken, chatId, userId) {
     console.warn(`⚠️ [TagController] ลบ title ไม่สำเร็จ user:${userId} → ${titleData.description}`);
   }
 
-  // ── ขั้น 2: demote กลับเป็น member ธรรมดา ──
+  // ── ขั้น 2: demote กลับเป็น member (ต้องส่ง true อย่างน้อย 1 field แล้ว toggle กลับ) ──
+  // วิธีที่ถูก: promote ด้วย can_manage_chat:true ก่อน แล้ว promote ซ้ำด้วย false ทั้งหมด
+  // แต่ Telegram Bot API จะ demote ได้เลยถ้าเรียก promoteChatMember ด้วย false ทั้งหมด
+  // หลังจาก set title เป็นว่างแล้ว (ลำดับสำคัญมาก)
   const demoteRes = await fetch(`${baseUrl}/promoteChatMember`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       chat_id:               chatId,
       user_id:               userId,
-      is_anonymous:          false,
       can_manage_chat:       false,
       can_post_messages:     false,
       can_edit_messages:     false,
