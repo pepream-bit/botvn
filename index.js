@@ -5,6 +5,7 @@ const {
   getBossById,
   spawnBoss,
   getSpawnSettings,
+  getRank,
 } = require('./bossController');
 const {
   awardTag,
@@ -42,16 +43,17 @@ async function scheduleBossHpUpdate(bot, chatId, messageId, boss, currentHp) {
     const pct = Math.max(0, Math.round((latestHp / fight.maxHp) * 100));
     const bar = buildHpBar(latestHp, fight.maxHp);
 
-    // pct เหลืออยู่ (สำหรับ bar) และ pct ที่ลดไปแล้ว (สำหรับแสดง)
     const lostPct = Math.round(((fight.maxHp - latestHp) / fight.maxHp) * 100);
+    const r = getRank(boss.rank);
+    const line = r.border.repeat(20);
     const newCaption =
-      `⚔️ <b>[ บอสกำลังถูกโจมตี! ]</b>\n` +
-      `━━━━━━━━━━━━━━━━━━━━\n` +
+      `${r.emoji} <b>[ ${r.label} BOSS กำลังถูกโจมตี! ]</b>\n` +
+      `${line}\n` +
       `👾 <b>${boss.name}</b>\n` +
       `❤️ <b>${latestHp.toLocaleString()}</b> / ${fight.maxHp.toLocaleString()} HP  (-${lostPct}%)\n` +
       `${bar}\n` +
       `🏆 รางวัล: <b>${boss.rewardTag}</b>\n` +
-      `━━━━━━━━━━━━━━━━━━━━\n` +
+      `${line}\n` +
       `⚡️ กดเพื่อโจมตี! (ตีได้สูงสุด ${boss.maxDmgPct || 5}%/ครั้ง)`;
 
     const keyboard = {
@@ -498,10 +500,12 @@ async function sendBossMenu(chatId, groupId) {
     ? `⏰ ทุก ${settings.spawnIntervalMinutes} นาที`
     : `💬 ทุก ${settings.spawnEveryNMessages} ข้อความ`;
 
+  const { getRank: _getRank } = require('./bossController');
   const bossList = groupBosses.length > 0
-    ? groupBosses.map((b, i) =>
-        `${i + 1}. ${b.isActive ? '🟢' : '🔴'} <b>${b.name}</b>  ❤️${b.hp.toLocaleString()}  HP  |  🏆${b.rewardTag}`
-      ).join('\n')
+    ? groupBosses.map((b, i) => {
+        const rk = _getRank(b.rank);
+        return `${i + 1}. ${b.isActive ? '🟢' : '🔴'} ${rk.emoji}<b>${b.name}</b> [${rk.label}]  ❤️${b.hp.toLocaleString()} HP`;
+      }).join('\n')
     : '<i>ยังไม่มีบอสในเซกเตอร์นี้</i>';
 
   const keyboard = [
@@ -518,6 +522,7 @@ async function sendBossMenu(chatId, groupId) {
     [{ text: `⏱️ ตั้งค่า Spawn (${modeLabel})`, callback_data: `opt_spawnconfig_${groupId}` }],
     [{ text: '⚔️ ตั้งค่า Damage % ต่อตี', callback_data: `opt_bossdmg_${groupId}` }],
     [{ text: '🖼️ เปลี่ยนรูปบอส', callback_data: `opt_bossmedia_${groupId}` }],
+    [{ text: '🎚️ ตั้งค่า Rank บอส', callback_data: `opt_bossrank_${groupId}` }],
     [{ text: '⬅️ ย้อนกลับ', callback_data: `select_group_${groupId}` }]
   ];
 
@@ -752,15 +757,17 @@ bot.on('callback_query', async (query) => {
         const moreText = pool.length > 5 ? `\n+${pool.length - 5} คน` : '';
 
         // Edit ข้อความเป็น "บอสตาย"
+        const rd = getRank(boss.rank);
+        const dline = rd.border.repeat(20);
         const deadCaption =
-          `💀 <b>[ บอสถูกกำจัดแล้ว! ]</b>\n` +
-          `━━━━━━━━━━━━━━━━━━━━\n` +
-          `👾 <b>${boss.name}</b> — ถูกสังหารแล้ว\n` +
+          `💀 <b>[ ${rd.label} BOSS ถูกกำจัดแล้ว! ]</b>\n` +
+          `${dline}\n` +
+          `${rd.emoji} <b>${boss.name}</b> — ถูกสังหารแล้ว\n` +
           `⚔️ ผู้ร่วมล่า ${attackerCount} คน:\n${attackerList}${moreText}\n` +
-          `━━━━━━━━━━━━━━━━━━━━\n` +
+          `${dline}\n` +
           `🎲 ผู้โชคดี: <a href="tg://user?id=${winner.userId}">${winner.name}</a>\n` +
           `🏆 ได้รับฉายา: <b>${boss.rewardTag}</b>\n` +
-          `━━━━━━━━━━━━━━━━━━━━`;
+          `${dline}`;
 
         try {
           // ทุกสื่อแนบ (photo/animation/video/URL) ใช้ editMessageCaption
@@ -925,7 +932,7 @@ bot.on('callback_query', async (query) => {
     if (action.includes('sector')) backTarget = 'menu_sectors';
     if (action.includes('logch')) backTarget = `menu_log_${groupId}`;
     if (action.includes('notify')) backTarget = 'menu_whitelist';
-    if (['addboss','delboss','spawnboss','spawnconfig','bossdmg','bossmedia'].includes(action)) backTarget = `menu_boss_${groupId}`;
+    if (['addboss','delboss','spawnboss','spawnconfig','bossdmg','bossmedia','bossrank'].includes(action)) backTarget = `menu_boss_${groupId}`;
 
     const cancelMenu = { inline_keyboard: [[{ text: '❌ ยกเลิกและกลับ', callback_data: backTarget }]] };
 
@@ -948,9 +955,10 @@ bot.on('callback_query', async (query) => {
     if (action === 'addsector') promptMsg = `➕ <b>[เพิ่มเซกเตอร์]</b>\nพิมพ์ <b>ข้อมูลเซกเตอร์</b> (รูปแบบ: <code>IDกลุ่ม:ชื่อกลุ่ม</code>)\nตัวอย่าง: <code>-10012345678:ดาวอังคาร</code>`;
     if (action === 'delsector') promptMsg = `➖ <b>[ลบเซกเตอร์]</b>\nพิมพ์ <b>ID ตัวเลข</b> ของเซกเตอร์ที่ต้องการลบ\n(เช่น: <code>-10012345678</code>):`;
     if (action === 'setlogch')  promptMsg = `➕ <b>[ตั้งพิกัด Log Channel]</b>\nพิมพ์ <b>ID ตัวเลข</b> ของ Telegram Channel ที่ต้องการรับ Log ของกลุ่มนี้\n(ตัวอย่าง: <code>-100123456789</code>):`;
-    if (action === 'addboss')    promptMsg = `➕ <b>[เพิ่มบอสใหม่]</b>\nรูปแบบ (คั่นด้วย |):\n<code>ชื่อ|HP|ฉายา|ชั่วโมงฉายา|spawnRate%|maxDmg%ต่อตี|URL_รูป</code>\nตัวอย่าง: <code>Dragon|50000|🐉 นักล่ามังกร|24|60|5|https://i.imgur.com/xxx.jpg</code>\n⚠️ URL รูปต้องเป็น https ตรง (jpg/png)\nถ้าไม่ใส่ค่า ใช้ค่าตั้งต้น (HP=10000, Tag=👑, 24ชม, 50%, Dmg=5%, ไม่มีรูป)`;
+    if (action === 'addboss')    promptMsg = `➕ <b>[เพิ่มบอสใหม่]</b>\nรูปแบบ (คั่นด้วย |):\n<code>ชื่อ|HP|ฉายา|ชั่วโมงฉายา|spawnRate%|maxDmg%|rank|URL_รูป</code>\n\n🎚️ ระดับบอส (rank):\n⚪ normal  🔵 rare  🟡 legend  🟣 mystic  🔴 limit\n\nตัวอย่าง: <code>Dragon|50000|🐉 นักล่ามังกร|24|60|5|legend|https://i.imgur.com/xxx.jpg</code>\nถ้าไม่ใส่ rank ใช้ค่าตั้งต้น normal`;
     if (action === 'delboss')    promptMsg = `➖ <b>[ลบบอส]</b>\nพิมพ์ <b>ชื่อบอส</b> ที่ต้องการลบออกจากคลัง:`;
     if (action === 'spawnboss')  promptMsg = `⚔️ <b>[เสกบอสทันที]</b>\nพิมพ์ <b>ชื่อบอส</b> ที่ต้องการเสกลงกลุ่ม (ต้องมีในคลังแล้ว):`;
+    if (action === 'bossrank')   promptMsg = `🎚️ <b>[ตั้งค่า Rank บอส]</b>\nพิมพ์: <code>ชื่อบอส|rank</code>\n\nระดับที่มี:\n⚪ <code>normal</code>  🔵 <code>rare</code>  🟡 <code>legend</code>  🟣 <code>mystic</code>  🔴 <code>limit</code>\n\nตัวอย่าง: <code>Dragon|legend</code>`;
     if (action === 'bossmedia')  promptMsg = `🖼️ <b>[เปลี่ยนรูปบอส]</b>\nส่งข้อความ 2 บรรทัด:\nบรรทัด 1: <b>ชื่อบอส</b>\nบรรทัด 2: <b>ส่งรูป/GIF/วิดีโอ</b> (แนบพร้อมกัน หรือ caption = ชื่อบอส)\n\n💡 ส่งรูปโดยใส่ชื่อบอสเป็น caption ของรูปได้เลย`;
     if (action === 'bossdmg')    promptMsg = `⚔️ <b>[ตั้งค่า Damage % ต่อตี]</b>\nพิมพ์รูปแบบ: <code>ชื่อบอส|maxDmg%</code>\nตัวอย่าง: <code>Dragon|5</code>\n→ แต่ละคนตีได้สูงสุด 5% ต่อครั้ง (สุ่มระหว่าง 1%–maxDmg%)`;
     if (action === 'spawnconfig') promptMsg = `⏱️ <b>[ตั้งค่า Spawn Interval]</b>\nโหมด time → พิมพ์จำนวน <b>นาที</b>\nโหมด message → พิมพ์จำนวน <b>ข้อความ</b>\nตัวอย่าง: <code>60</code>`;
@@ -1054,7 +1062,10 @@ bot.on('message', async (msg) => {
         break;
       }
       try {
-        const rawUrl = parts[6] ? parts[6].trim() : null;
+        const validRanks = ['normal','rare','legend','mystic','limit'];
+        const rawRank = parts[6] ? parts[6].trim().toLowerCase() : 'normal';
+        const bossRank = validRanks.includes(rawRank) ? rawRank : 'normal';
+        const rawUrl = parts[7] ? parts[7].trim() : null;
         if (rawUrl && !rawUrl.startsWith('https://')) {
           bot.sendMessage(chatId, '❌ URL รูปต้องขึ้นต้นด้วย https://\n💡 หรือใช้ปุ่ม "🖼️ เปลี่ยนรูปบอส" เพื่ออัปโหลดรูปโดยตรง', {
             parse_mode: 'HTML',
@@ -1069,11 +1080,12 @@ bot.on('message', async (msg) => {
           tagDurationHours: parts[3] ? parseInt(parts[3]) : 24,
           spawnRate:        parts[4] ? parseInt(parts[4]) : 50,
           maxDmgPct:        parts[5] ? parseFloat(parts[5]) : 5,
+          rank:             bossRank,
           imageUrl:         rawUrl || null,
           targetGroupId:    parseInt(groupId),
         });
         bot.sendMessage(chatId,
-          `✅ <b>เพิ่มบอสสำเร็จ!</b>\n👾 ชื่อ: <b>${boss.name}</b>\n❤️ HP: ${boss.hp.toLocaleString()}\n🏆 Tag: ${boss.rewardTag}\n⏱️ อายุฉายา: ${boss.tagDurationHours}h\n🎲 Rate: ${boss.spawnRate}%\n⚔️ Dmg สูงสุด: ${boss.maxDmgPct}%/ตี\n🖼️ รูป: ${boss.imageUrl ? '✅' : '❌ ไม่มี'}`,
+          (() => { const rk = getRank(boss.rank); return `✅ <b>เพิ่มบอสสำเร็จ!</b>\n${rk.emoji} ระดับ: <b>${rk.label}</b>\n👾 ชื่อ: <b>${boss.name}</b>\n❤️ HP: ${boss.hp.toLocaleString()}\n🏆 Tag: ${boss.rewardTag}\n⏱️ อายุฉายา: ${boss.tagDurationHours}h\n🎲 Rate: ${boss.spawnRate}%\n⚔️ Dmg สูงสุด: ${boss.maxDmgPct}%/ตี\n🖼️ รูป: ${boss.imageUrl ? '✅' : '❌ ไม่มี'}`; })(),
           { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⬅️ กลับหน้าบอส', callback_data: `menu_boss_${groupId}` }]] } }
         );
       } catch (e) {
@@ -1174,6 +1186,38 @@ bot.on('message', async (msg) => {
       bot.deleteMessage(msg.chat.id, msg.message_id).catch(() => {});
       bot.sendMessage(chatId,
         `✅ อัปเดตรูปบอส <b>${target.name}</b> สำเร็จ!\n🖼️ ประเภท: ${mediaType}\n📎 File ID: <code>${fileId.slice(0, 20)}...</code>`,
+        { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⬅️ กลับหน้าบอส', callback_data: `menu_boss_${groupId}` }]] } }
+      );
+      break;
+    }
+
+
+    case 'bossrank': {
+      const { getAllBosses, updateBoss } = require('./bossController');
+      const validRanks = ['normal','rare','legend','mystic','limit'];
+      const parts = inputStr.split('|').map(s => s.trim());
+      const targetName = parts[0];
+      const newRank = (parts[1] || '').toLowerCase();
+      if (!targetName || !validRanks.includes(newRank)) {
+        bot.sendMessage(chatId, '❌ รูปแบบไม่ถูกต้อง หรือ rank ไม่ถูกต้อง\nระดับที่ใช้ได้: normal, rare, legend, mystic, limit', {
+          parse_mode: 'HTML',
+          reply_markup: { inline_keyboard: [[{ text: '⬅️ กลับ', callback_data: `menu_boss_${groupId}` }]] }
+        });
+        break;
+      }
+      const bosses = await getAllBosses();
+      const target = bosses.find(b => b.name.toLowerCase() === targetName.toLowerCase() && String(b.targetGroupId) === String(groupId));
+      if (!target) {
+        bot.sendMessage(chatId, `❌ ไม่พบบอสชื่อ "<b>${targetName}</b>"`, {
+          parse_mode: 'HTML',
+          reply_markup: { inline_keyboard: [[{ text: '⬅️ กลับ', callback_data: `menu_boss_${groupId}` }]] }
+        });
+        break;
+      }
+      await updateBoss(target._id, { rank: newRank });
+      const rk = getRank(newRank);
+      bot.sendMessage(chatId,
+        `✅ อัปเดต Rank สำเร็จ\n👾 บอส: <b>${target.name}</b>\n${rk.emoji} Rank: <b>${rk.label}</b>`,
         { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⬅️ กลับหน้าบอส', callback_data: `menu_boss_${groupId}` }]] } }
       );
       break;
