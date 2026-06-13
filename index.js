@@ -56,11 +56,13 @@ async function scheduleBossHpUpdate(bot, chatId, messageId, boss, currentHp) {
 
     const keyboard = {
       inline_keyboard: [[
-        { text: `⚔️ โจมตี ${boss.name}! (${latestHp.toLocaleString()} HP)`, callback_data: `boss_attack_${boss._id}` }
+        { text: `⚔️ โจมตี ${boss.name}! (${latestHp.toLocaleString()} HP) | 👥${fight.attackers?.size || 0}`, callback_data: `boss_attack_${boss._id}` }
       ]]
     };
 
     try {
+      // ถ้ามีสื่อแนบ (ทั้ง fileid และ URL) → ใช้ editMessageCaption
+      // ถ้าไม่มีสื่อ → ใช้ editMessageText
       if (boss.imageUrl) {
         await bot.editMessageCaption(newCaption, {
           chat_id: chatId, message_id: messageId,
@@ -73,7 +75,6 @@ async function scheduleBossHpUpdate(bot, chatId, messageId, boss, currentHp) {
         });
       }
     } catch (e) {
-      // ข้าม error "message not modified" (ปกติมากใน Telegram)
       if (!e.message?.includes('not modified')) {
         console.warn(`⚠️ [BossHP] edit ล้มเหลว: ${e.message}`);
       }
@@ -516,6 +517,7 @@ async function sendBossMenu(chatId, groupId) {
     ],
     [{ text: `⏱️ ตั้งค่า Spawn (${modeLabel})`, callback_data: `opt_spawnconfig_${groupId}` }],
     [{ text: '⚔️ ตั้งค่า Damage % ต่อตี', callback_data: `opt_bossdmg_${groupId}` }],
+    [{ text: '🖼️ เปลี่ยนรูปบอส', callback_data: `opt_bossmedia_${groupId}` }],
     [{ text: '⬅️ ย้อนกลับ', callback_data: `select_group_${groupId}` }]
   ];
 
@@ -675,6 +677,8 @@ bot.on('callback_query', async (query) => {
           messageId,
           chatId,
           defeatMessageSent: false,
+          attackers: new Set(),      // userId ที่ตีแล้ว (1 คน 1 ตี)
+          rewardPool: [],            // { userId, username, name } ของทุกคนที่ตี
         };
       }
 
@@ -683,6 +687,18 @@ bot.on('callback_query', async (query) => {
       if (fight.defeatMessageSent) {
         return bot.answerCallbackQuery(query.id, { text: '💀 บอสตัวนี้ถูกกำจัดไปแล้ว!', show_alert: false });
       }
+
+      // ── ตรวจว่าตีซ้ำหรือยัง ──
+      if (fight.attackers.has(attackerId)) {
+        return bot.answerCallbackQuery(query.id, {
+          text: '⚠️ คุณตีบอสตัวนี้ไปแล้ว! รอบอสตัวใหม่',
+          show_alert: false
+        });
+      }
+
+      // ลงทะเบียนผู้ตี
+      fight.attackers.add(attackerId);
+      fight.rewardPool.push({ userId: attackerId, username: attackerUsername, name: attackerName });
 
       // คำนวณ damage (สุ่ม 1% – maxDmgPct% ของ maxHp)
       const maxPct = (boss.maxDmgPct || 5) / 100;
@@ -704,34 +720,50 @@ bot.on('callback_query', async (query) => {
         // ลบ fight state หลัง 5 วินาที
         setTimeout(() => delete activeBossFights[bossId], 5000);
 
-        // แจก Tag + บันทึกการฆ่า
+        // ── สุ่มผู้รับรางวัลจาก rewardPool ──
+        const pool = fight.rewardPool.length > 0 ? fight.rewardPool : [{ userId: attackerId, username: attackerUsername, name: attackerName }];
+        const winner = pool[Math.floor(Math.random() * pool.length)];
+        const attackerCount = pool.length;
+
+        // ส่ง callback ให้คนที่ตีตัวสุดท้ายก่อน (เร็ว)
+        bot.answerCallbackQuery(query.id, {
+          text: attackerId === winner.userId
+            ? `🎉 คุณโชคดี! ได้รับฉายา: ${boss.rewardTag}`
+            : `💥 บอสตายแล้ว! ผู้โชคดีคือ ${winner.name}`,
+          show_alert: true
+        }).catch(() => {});
+
+        // แจก Tag + บันทึกการฆ่าให้ winner
         try {
           await awardTag(
             process.env.BOT_TOKEN, chatId,
-            attackerId, attackerUsername, attackerName,
+            winner.userId, winner.username, winner.name,
             boss.rewardTag, boss.tagDurationHours
           );
-          await recordKill(attackerId, chatId, boss.name, attackerUsername, attackerName);
+          await recordKill(winner.userId, chatId, boss.name, winner.username, winner.name);
         } catch (tagErr) {
           console.warn(`⚠️ [BossKill] awardTag ล้มเหลว: ${tagErr.message}`);
         }
 
-        // ส่ง callback ก่อน (เร็ว)
-        bot.answerCallbackQuery(query.id, {
-          text: `💥 คุณสังหาร ${boss.name} สำเร็จ! ได้รับฉายา: ${boss.rewardTag}`,
-          show_alert: true
-        }).catch(() => {});
+        // สร้างรายชื่อผู้ร่วมตี (แสดงสูงสุด 5 คน)
+        const attackerList = pool.slice(0, 5)
+          .map((a, i) => `${i + 1}. <a href="tg://user?id=${a.userId}">${a.name}</a>`)
+          .join('\n');
+        const moreText = pool.length > 5 ? `\n+${pool.length - 5} คน` : '';
 
         // Edit ข้อความเป็น "บอสตาย"
         const deadCaption =
           `💀 <b>[ บอสถูกกำจัดแล้ว! ]</b>\n` +
           `━━━━━━━━━━━━━━━━━━━━\n` +
           `👾 <b>${boss.name}</b> — ถูกสังหารแล้ว\n` +
-          `⚔️ ผู้สังหาร: <a href="tg://user?id=${attackerId}">${attackerName}</a>\n` +
-          `🏆 รางวัล: <b>${boss.rewardTag}</b> ถูกมอบให้แล้ว!\n` +
+          `⚔️ ผู้ร่วมล่า ${attackerCount} คน:\n${attackerList}${moreText}\n` +
+          `━━━━━━━━━━━━━━━━━━━━\n` +
+          `🎲 ผู้โชคดี: <a href="tg://user?id=${winner.userId}">${winner.name}</a>\n` +
+          `🏆 ได้รับฉายา: <b>${boss.rewardTag}</b>\n` +
           `━━━━━━━━━━━━━━━━━━━━`;
 
         try {
+          // ทุกสื่อแนบ (photo/animation/video/URL) ใช้ editMessageCaption
           if (boss.imageUrl) {
             await bot.editMessageCaption(deadCaption, {
               chat_id: chatId, message_id: messageId,
@@ -893,7 +925,7 @@ bot.on('callback_query', async (query) => {
     if (action.includes('sector')) backTarget = 'menu_sectors';
     if (action.includes('logch')) backTarget = `menu_log_${groupId}`;
     if (action.includes('notify')) backTarget = 'menu_whitelist';
-    if (['addboss','delboss','spawnboss','spawnconfig','bossdmg'].includes(action)) backTarget = `menu_boss_${groupId}`;
+    if (['addboss','delboss','spawnboss','spawnconfig','bossdmg','bossmedia'].includes(action)) backTarget = `menu_boss_${groupId}`;
 
     const cancelMenu = { inline_keyboard: [[{ text: '❌ ยกเลิกและกลับ', callback_data: backTarget }]] };
 
@@ -919,6 +951,7 @@ bot.on('callback_query', async (query) => {
     if (action === 'addboss')    promptMsg = `➕ <b>[เพิ่มบอสใหม่]</b>\nรูปแบบ (คั่นด้วย |):\n<code>ชื่อ|HP|ฉายา|ชั่วโมงฉายา|spawnRate%|maxDmg%ต่อตี|URL_รูป</code>\nตัวอย่าง: <code>Dragon|50000|🐉 นักล่ามังกร|24|60|5|https://i.imgur.com/xxx.jpg</code>\n⚠️ URL รูปต้องเป็น https ตรง (jpg/png)\nถ้าไม่ใส่ค่า ใช้ค่าตั้งต้น (HP=10000, Tag=👑, 24ชม, 50%, Dmg=5%, ไม่มีรูป)`;
     if (action === 'delboss')    promptMsg = `➖ <b>[ลบบอส]</b>\nพิมพ์ <b>ชื่อบอส</b> ที่ต้องการลบออกจากคลัง:`;
     if (action === 'spawnboss')  promptMsg = `⚔️ <b>[เสกบอสทันที]</b>\nพิมพ์ <b>ชื่อบอส</b> ที่ต้องการเสกลงกลุ่ม (ต้องมีในคลังแล้ว):`;
+    if (action === 'bossmedia')  promptMsg = `🖼️ <b>[เปลี่ยนรูปบอส]</b>\nส่งข้อความ 2 บรรทัด:\nบรรทัด 1: <b>ชื่อบอส</b>\nบรรทัด 2: <b>ส่งรูป/GIF/วิดีโอ</b> (แนบพร้อมกัน หรือ caption = ชื่อบอส)\n\n💡 ส่งรูปโดยใส่ชื่อบอสเป็น caption ของรูปได้เลย`;
     if (action === 'bossdmg')    promptMsg = `⚔️ <b>[ตั้งค่า Damage % ต่อตี]</b>\nพิมพ์รูปแบบ: <code>ชื่อบอส|maxDmg%</code>\nตัวอย่าง: <code>Dragon|5</code>\n→ แต่ละคนตีได้สูงสุด 5% ต่อครั้ง (สุ่มระหว่าง 1%–maxDmg%)`;
     if (action === 'spawnconfig') promptMsg = `⏱️ <b>[ตั้งค่า Spawn Interval]</b>\nโหมด time → พิมพ์จำนวน <b>นาที</b>\nโหมด message → พิมพ์จำนวน <b>ข้อความ</b>\nตัวอย่าง: <code>60</code>`;
         if (action === 'dellogch')  promptMsg = `➖ <b>[ลบพิกัด Log Channel]</b>\nพิมพ์คำว่า <code>ยืนยัน</code> เพื่อลบพิกัด Channel เฉพาะของเซกเตอร์นี้\n(บอทจะกลับไปใช้แชนแนลกลางจาก .env แทน):`;
@@ -997,8 +1030,8 @@ bot.on('message', async (msg) => {
   const delTime = getDeleteTime(groupId);
   const inputStr = msg.text ? msg.text.trim() : '';
 
-  // ลบข้อความที่พิมพ์เข้ามา (ยกเว้น ann ที่ต้องใช้ข้อความนั้น)
-  if (action !== 'ann') bot.deleteMessage(msg.chat.id, msg.message_id).catch(() => {});
+  // ลบข้อความที่พิมพ์เข้ามา (ยกเว้น ann, bossmedia ที่ต้องใช้ไฟล์/ข้อความนั้น)
+  if (action !== 'ann' && action !== 'bossmedia') bot.deleteMessage(msg.chat.id, msg.message_id).catch(() => {});
   if (promptMsgId) bot.deleteMessage(chatId, promptMsgId).catch(() => {});
   monitorSessions.delete(msg.from.id);
 
@@ -1022,6 +1055,13 @@ bot.on('message', async (msg) => {
       }
       try {
         const rawUrl = parts[6] ? parts[6].trim() : null;
+        if (rawUrl && !rawUrl.startsWith('https://')) {
+          bot.sendMessage(chatId, '❌ URL รูปต้องขึ้นต้นด้วย https://\n💡 หรือใช้ปุ่ม "🖼️ เปลี่ยนรูปบอส" เพื่ออัปโหลดรูปโดยตรง', {
+            parse_mode: 'HTML',
+            reply_markup: { inline_keyboard: [[{ text: '⬅️ กลับ', callback_data: `menu_boss_${groupId}` }]] }
+          });
+          break;
+        }
         const boss = await createBoss({
           name:             bossName,
           hp:               parts[1] ? parseInt(parts[1]) : 10000,
@@ -1072,6 +1112,72 @@ bot.on('message', async (msg) => {
       break;
     }
 
+
+
+    case 'bossmedia': {
+      const { getAllBosses, updateBoss } = require('./bossController');
+
+      // ดึง file_id จากรูป/GIF/วิดีโอที่แนบมา
+      let fileId = null;
+      let mediaType = null;
+      if (msg.photo && msg.photo.length > 0) {
+        // photo array — เลือก resolution สูงสุด (ตัวสุดท้าย)
+        fileId = msg.photo[msg.photo.length - 1].file_id;
+        mediaType = 'photo';
+      } else if (msg.animation) {
+        fileId = msg.animation.file_id;
+        mediaType = 'animation';
+      } else if (msg.video) {
+        fileId = msg.video.file_id;
+        mediaType = 'video';
+      } else if (msg.document && msg.document.mime_type && msg.document.mime_type.startsWith('image/')) {
+        fileId = msg.document.file_id;
+        mediaType = 'photo';
+      }
+
+      // ชื่อบอส — อ่านจาก caption ของรูป หรือ inputStr (ถ้าส่งข้อความ)
+      const bossNameRaw = (msg.caption || inputStr || '').trim();
+
+      if (!fileId) {
+        bot.deleteMessage(msg.chat.id, msg.message_id).catch(() => {});
+        bot.sendMessage(chatId,
+          '❌ ไม่พบไฟล์รูป/GIF/วิดีโอ\nกรุณาส่งรูปพร้อม caption = ชื่อบอส',
+          { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⬅️ กลับ', callback_data: `menu_boss_${groupId}` }]] } }
+        );
+        break;
+      }
+      if (!bossNameRaw) {
+        bot.deleteMessage(msg.chat.id, msg.message_id).catch(() => {});
+        bot.sendMessage(chatId,
+          '❌ ต้องระบุชื่อบอส (ใส่เป็น caption ของรูป หรือพิมพ์ชื่อบอสมา)',
+          { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⬅️ กลับ', callback_data: `menu_boss_${groupId}` }]] } }
+        );
+        break;
+      }
+
+      const bosses = await getAllBosses();
+      const target = bosses.find(b =>
+        b.name.toLowerCase() === bossNameRaw.toLowerCase() &&
+        String(b.targetGroupId) === String(groupId)
+      );
+      if (!target) {
+        bot.deleteMessage(msg.chat.id, msg.message_id).catch(() => {});
+        bot.sendMessage(chatId, `❌ ไม่พบบอสชื่อ "<b>${bossNameRaw}</b>" ในเซกเตอร์นี้`, {
+          parse_mode: 'HTML',
+          reply_markup: { inline_keyboard: [[{ text: '⬅️ กลับ', callback_data: `menu_boss_${groupId}` }]] }
+        });
+        break;
+      }
+
+      // เก็บเป็น file_id:type เพื่อให้ spawnBoss รู้ว่าส่งด้วย method ไหน
+      await updateBoss(target._id, { imageUrl: `fileid:${mediaType}:${fileId}` });
+      bot.deleteMessage(msg.chat.id, msg.message_id).catch(() => {});
+      bot.sendMessage(chatId,
+        `✅ อัปเดตรูปบอส <b>${target.name}</b> สำเร็จ!\n🖼️ ประเภท: ${mediaType}\n📎 File ID: <code>${fileId.slice(0, 20)}...</code>`,
+        { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⬅️ กลับหน้าบอส', callback_data: `menu_boss_${groupId}` }]] } }
+      );
+      break;
+    }
 
     case 'bossdmg': {
       const { getAllBosses, updateBoss } = require('./bossController');
