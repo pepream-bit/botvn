@@ -39,16 +39,21 @@ async function promoteToAdmin(botToken, chatId, userId) {
     body: JSON.stringify({
       chat_id:                chatId,
       user_id:                userId,
-      can_manage_chat:        true,   // ← field เดียวที่ true
+      is_anonymous:           false,
+      can_manage_chat:        true,   // ← เปิดแค่นี้เพื่อให้ set custom title ได้
+      can_change_info:        false,
+      can_delete_messages:    false,
+      can_invite_users:       false,
+      can_restrict_members:   false,
+      can_pin_messages:       false,
+      can_promote_members:    false,
+      can_manage_video_chats: false,
       can_post_messages:      false,
       can_edit_messages:      false,
-      can_delete_messages:    false,
-      can_manage_video_chats: false,
-      can_restrict_members:   false,
-      can_promote_members:    false,
-      can_change_info:        false,
-      can_invite_users:       false,
-      can_pin_messages:       false,
+      can_manage_topics:      false,  // supergroup topics
+      can_post_stories:       false,
+      can_edit_stories:       false,
+      can_delete_stories:     false,
     })
   });
   const data = await res.json();
@@ -66,16 +71,21 @@ async function demoteToMember(botToken, chatId, userId) {
     body: JSON.stringify({
       chat_id:                chatId,
       user_id:                userId,
+      is_anonymous:           false,
       can_manage_chat:        false,
+      can_change_info:        false,
+      can_delete_messages:    false,
+      can_invite_users:       false,
+      can_restrict_members:   false,
+      can_pin_messages:       false,
+      can_promote_members:    false,
+      can_manage_video_chats: false,
       can_post_messages:      false,
       can_edit_messages:      false,
-      can_delete_messages:    false,
-      can_manage_video_chats: false,
-      can_restrict_members:   false,
-      can_promote_members:    false,
-      can_change_info:        false,
-      can_invite_users:       false,
-      can_pin_messages:       false,
+      can_manage_topics:      false,
+      can_post_stories:       false,
+      can_edit_stories:       false,
+      can_delete_stories:     false,
     })
   });
   const data = await res.json();
@@ -108,12 +118,19 @@ async function setCustomTitle(botToken, chatId, userId, tag, retries = 3) {
 }
 
 // ──────────────────────────────────────────
-// 📌 setChatMemberTag — promote แล้ว set title
-//    user จะเป็น admin ตลอดจนกว่าฉายาจะหมดอายุ
+// 📌 setChatMemberTag — promote → set title → demote ทันที
+//    Telegram เก็บ custom title ไว้ใน profile แม้ demote แล้ว
+//    (title ยังแสดงอยู่ แต่ user จะไม่มีสิทธิ์ admin)
 // ──────────────────────────────────────────
 async function setChatMemberTag(botToken, chatId, userId, tag) {
+  // 1. promote เป็น admin ชั่วคราว
   await promoteToAdmin(botToken, chatId, userId);
+
+  // 2. set custom title (retry จนสำเร็จ)
   await setCustomTitle(botToken, chatId, userId, tag);
+
+  // 3. demote กลับเป็น member ทันที — title ยังคงอยู่ใน profile
+  await demoteToMember(botToken, chatId, userId);
 }
 
 // ──────────────────────────────────────────
