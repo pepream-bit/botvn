@@ -524,6 +524,7 @@ async function sendBossMenu(chatId, groupId) {
       { text: settings.pinOnSpawn ? '📌 PIN เมื่อบอสเกิด: ON' : '📌 PIN เมื่อบอสเกิด: OFF', callback_data: `toggle_pinspawn_${groupId}` },
       { text: settings.deleteOnDefeat ? '🗑️ ลบโพสต์เมื่อตาย: ON' : '🗑️ ลบโพสต์เมื่อตาย: OFF', callback_data: `toggle_deldefeat_${groupId}` }
     ],
+    [{ text: '🏷️ แก้ไขฉายา / อายุฉายา', callback_data: `opt_bosstag_${groupId}` }],
     [{ text: '⚔️ ตั้งค่า Damage % ต่อตี', callback_data: `opt_bossdmg_${groupId}` }],
     [{ text: '🖼️ เปลี่ยนรูปบอส', callback_data: `opt_bossmedia_${groupId}` }],
     [{ text: '🎚️ ตั้งค่า Rank บอส', callback_data: `opt_bossrank_${groupId}` }],
@@ -979,7 +980,7 @@ bot.on('callback_query', async (query) => {
     if (action.includes('sector')) backTarget = 'menu_sectors';
     if (action.includes('logch')) backTarget = `menu_log_${groupId}`;
     if (action.includes('notify')) backTarget = 'menu_whitelist';
-    if (['addboss','delboss','spawnboss','spawnconfig','bossdmg','bossmedia','bossrank'].includes(action)) backTarget = `menu_boss_${groupId}`;
+    if (['addboss','delboss','spawnboss','spawnconfig','bossdmg','bossmedia','bossrank','bosstag'].includes(action)) backTarget = `menu_boss_${groupId}`;
 
     const cancelMenu = { inline_keyboard: [[{ text: '❌ ยกเลิกและกลับ', callback_data: backTarget }]] };
 
@@ -1008,6 +1009,7 @@ bot.on('callback_query', async (query) => {
     if (action === 'bossrank')   promptMsg = `🎚️ <b>[ตั้งค่า Rank บอส]</b>\nพิมพ์: <code>ชื่อบอส|rank</code>\n\nระดับที่มี:\n⚪ <code>normal</code>  🔵 <code>rare</code>  🟡 <code>legend</code>  🟣 <code>mystic</code>  🔴 <code>limit</code>\n\nตัวอย่าง: <code>Dragon|legend</code>`;
     if (action === 'bossmedia')  promptMsg = `🖼️ <b>[เปลี่ยนรูปบอส]</b>\nส่งข้อความ 2 บรรทัด:\nบรรทัด 1: <b>ชื่อบอส</b>\nบรรทัด 2: <b>ส่งรูป/GIF/วิดีโอ</b> (แนบพร้อมกัน หรือ caption = ชื่อบอส)\n\n💡 ส่งรูปโดยใส่ชื่อบอสเป็น caption ของรูปได้เลย`;
     if (action === 'bossdmg')    promptMsg = `⚔️ <b>[ตั้งค่า Damage % ต่อตี]</b>\nพิมพ์รูปแบบ: <code>ชื่อบอส|maxDmg%</code>\nตัวอย่าง: <code>Dragon|5</code>\n→ แต่ละคนตีได้สูงสุด 5% ต่อครั้ง (สุ่มระหว่าง 1%–maxDmg%)`;
+    if (action === 'bosstag')    promptMsg = `🏷️ <b>[แก้ไขฉายาบอส]</b>\nรูปแบบ: <code>ชื่อบอส|ฉายาใหม่|ชั่วโมง</code>\n\n• <b>ชั่วโมง</b> = อายุฉายา (0 = ถาวร)\n\nตัวอย่าง: <code>Dragon|🐉 จอมมังกรสีเลือด|48</code>\nหรือถาวร: <code>Dragon|🐉 จอมมังกรสีเลือด|0</code>`;
     if (action === 'spawnconfig') promptMsg = `⏱️ <b>[ตั้งค่า Spawn Interval]</b>\nโหมด time → พิมพ์จำนวน <b>นาที</b>\nโหมด message → พิมพ์จำนวน <b>ข้อความ</b>\nตัวอย่าง: <code>60</code>`;
         if (action === 'dellogch')  promptMsg = `➖ <b>[ลบพิกัด Log Channel]</b>\nพิมพ์คำว่า <code>ยืนยัน</code> เพื่อลบพิกัด Channel เฉพาะของเซกเตอร์นี้\n(บอทจะกลับไปใช้แชนแนลกลางจาก .env แทน):`;
 
@@ -1294,6 +1296,41 @@ bot.on('message', async (msg) => {
       await updateBoss(target._id, { maxDmgPct: newPct });
       bot.sendMessage(chatId,
         `✅ อัปเดต Damage % สำเร็จ\n👾 บอส: <b>${target.name}</b>\n⚔️ แต่ละคนตีได้ <b>1%–${newPct}%</b> ต่อครั้ง`,
+        { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⬅️ กลับหน้าบอส', callback_data: `menu_boss_${groupId}` }]] } }
+      );
+      break;
+    }
+
+    case 'bosstag': {
+      const { getAllBosses, updateBoss } = require('./bossController');
+      const parts = inputStr.split('|').map(s => s.trim());
+      const targetName  = parts[0];
+      const newTag      = parts[1];
+      const newDuration = parts[2] !== undefined ? parseFloat(parts[2]) : NaN;
+
+      if (!targetName || !newTag || isNaN(newDuration) || newDuration < 0) {
+        bot.sendMessage(chatId,
+          '❌ รูปแบบไม่ถูกต้อง\nตัวอย่าง: <code>Dragon|🐉 จอมมังกรสีเลือด|48</code>\nหรือถาวร: <code>Dragon|🐉 จอมมังกรสีเลือด|0</code>',
+          { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⬅️ กลับ', callback_data: `menu_boss_${groupId}` }]] } }
+        );
+        break;
+      }
+      const bosses = await getAllBosses();
+      const target = bosses.find(b =>
+        b.name.toLowerCase() === targetName.toLowerCase() &&
+        String(b.targetGroupId) === String(groupId)
+      );
+      if (!target) {
+        bot.sendMessage(chatId, `❌ ไม่พบบอสชื่อ "<b>${targetName}</b>" ในเซกเตอร์นี้`, {
+          parse_mode: 'HTML',
+          reply_markup: { inline_keyboard: [[{ text: '⬅️ กลับ', callback_data: `menu_boss_${groupId}` }]] }
+        });
+        break;
+      }
+      await updateBoss(target._id, { rewardTag: newTag, tagDurationHours: newDuration });
+      const durText = newDuration === 0 ? '♾️ ถาวร' : `⏳ ${newDuration} ชั่วโมง`;
+      bot.sendMessage(chatId,
+        `✅ อัปเดตฉายาสำเร็จ\n👾 บอส: <b>${target.name}</b>\n🏷️ ฉายาใหม่: <b>${newTag}</b>\n${durText}`,
         { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⬅️ กลับหน้าบอส', callback_data: `menu_boss_${groupId}` }]] } }
       );
       break;
