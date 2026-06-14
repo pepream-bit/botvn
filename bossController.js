@@ -39,6 +39,8 @@ const SpawnSettingsSchema = new mongoose.Schema({
   spawnEveryNMessages:  { type: Number, default: 100 },   // ถ้า mode=message: เกิดทุกกี่ข้อความ
   messageCounter: { type: Number, default: 0 },           // นับข้อความปัจจุบัน
   lastSpawnAt:  { type: Date, default: null },             // เวลาที่ Spawn ล่าสุด
+  deleteOnDefeat: { type: Boolean, default: false },      // ลบโพสต์บอสหลังตายเสร็จ
+  pinOnSpawn:     { type: Boolean, default: false },      // PIN โพสต์บอสเมื่อ Spawn
 });
 
 const SpawnSettings = mongoose.model('SpawnSettings', SpawnSettingsSchema);
@@ -110,7 +112,7 @@ async function pickRandomBoss() {
 }
 
 // ฟังก์ชันกลาง: เสกบอสลงกลุ่ม (ทั้ง Manual และ Auto ใช้ฟังก์ชันนี้)
-async function spawnBoss(bot, boss, tgQueue) {
+async function spawnBoss(bot, boss, tgQueue, overrideSettings = null) {
   const chatId = boss.targetGroupId;
 
   try {
@@ -168,6 +170,19 @@ async function spawnBoss(bot, boss, tgQueue) {
     // อัปเดตเวลา spawn ล่าสุด
     await saveSpawnSettings({ lastSpawnAt: new Date() });
 
+    // PIN โพสต์บอส (ถ้าเปิดใช้งาน)
+    const settings = overrideSettings || (await getSpawnSettings());
+    if (settings.pinOnSpawn) {
+      try {
+        await tgQueue.add(() =>
+          bot.pinChatMessage(chatId, sentMsg.message_id, { disable_notification: true })
+        );
+        console.log(`📌 [Boss] PIN โพสต์บอส "${boss.name}" (msg_id: ${sentMsg.message_id}) สำเร็จ`);
+      } catch (pinErr) {
+        console.warn(`⚠️ [Boss] PIN ล้มเหลว: ${pinErr.message}`);
+      }
+    }
+
     console.log(`👾 [Boss] Spawn "${boss.name}" ลงกลุ่ม ${chatId} (msg_id: ${sentMsg.message_id})`);
     return sentMsg;
 
@@ -203,7 +218,7 @@ async function checkAutoSpawn(bot, tgQueue) {
     if (shouldSpawn) {
       const boss = await pickRandomBoss();
       if (boss) {
-        await spawnBoss(bot, boss, tgQueue);
+        await spawnBoss(bot, boss, tgQueue, settings);
         console.log(`⏰ [AutoSpawn] Time-based spawn: ${boss.name}`);
       }
     }
@@ -225,7 +240,7 @@ async function incrementMessageCounter(bot, tgQueue) {
       await saveSpawnSettings({ messageCounter: 0 });
       const boss = await pickRandomBoss();
       if (boss) {
-        await spawnBoss(bot, boss, tgQueue);
+        await spawnBoss(bot, boss, tgQueue, settings);
         console.log(`💬 [AutoSpawn] Message-based spawn: ${boss.name} (ทุก ${settings.spawnEveryNMessages} ข้อความ)`);
       }
     } else {
