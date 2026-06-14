@@ -520,6 +520,10 @@ async function sendBossMenu(chatId, groupId) {
       { text: settings.spawnMode === 'message' ? '✅ โหมด: ข้อความ' : '⬜ โหมด: ข้อความ', callback_data: `toggle_spawnmode_msg_${groupId}` }
     ],
     [{ text: `⏱️ ตั้งค่า Spawn (${modeLabel})`, callback_data: `opt_spawnconfig_${groupId}` }],
+    [
+      { text: settings.pinOnSpawn ? '📌 PIN เมื่อบอสเกิด: ON' : '📌 PIN เมื่อบอสเกิด: OFF', callback_data: `toggle_pinspawn_${groupId}` },
+      { text: settings.deleteOnDefeat ? '🗑️ ลบโพสต์เมื่อตาย: ON' : '🗑️ ลบโพสต์เมื่อตาย: OFF', callback_data: `toggle_deldefeat_${groupId}` }
+    ],
     [{ text: '⚔️ ตั้งค่า Damage % ต่อตี', callback_data: `opt_bossdmg_${groupId}` }],
     [{ text: '🖼️ เปลี่ยนรูปบอส', callback_data: `opt_bossmedia_${groupId}` }],
     [{ text: '🎚️ ตั้งค่า Rank บอส', callback_data: `opt_bossrank_${groupId}` }],
@@ -769,21 +773,50 @@ bot.on('callback_query', async (query) => {
           `🏆 ได้รับฉายา: <b>${boss.rewardTag}</b>\n` +
           `${dline}`;
 
-        try {
-          // ทุกสื่อแนบ (photo/animation/video/URL) ใช้ editMessageCaption
-          if (boss.imageUrl) {
-            await bot.editMessageCaption(deadCaption, {
-              chat_id: chatId, message_id: messageId,
-              parse_mode: 'HTML', reply_markup: { inline_keyboard: [] }
-            });
-          } else {
-            await bot.editMessageText(deadCaption, {
-              chat_id: chatId, message_id: messageId,
-              parse_mode: 'HTML', reply_markup: { inline_keyboard: [] }
-            });
+        // โหลด settings เพื่อเช็ค deleteOnDefeat / pinOnSpawn
+        let bossSettings = null;
+        try { bossSettings = await getSpawnSettings(); } catch (_) {}
+        const shouldDelete   = bossSettings?.deleteOnDefeat ?? false;
+        const wasPinned      = bossSettings?.pinOnSpawn ?? false;
+
+        if (shouldDelete) {
+          // ── ลบโพสต์บอสทิ้งทันที (unpin ก่อนถ้าเคย PIN ไว้) ──
+          try {
+            if (wasPinned) {
+              await bot.unpinChatMessage(chatId, { message_id: messageId }).catch(() => {});
+            }
+            await bot.deleteMessage(chatId, messageId);
+            console.log(`🗑️ [BossKill] ลบโพสต์บอส "${boss.name}" (msg_id: ${messageId}) สำเร็จ`);
+          } catch (delErr) {
+            console.warn(`⚠️ [BossKill] ลบโพสต์ล้มเหลว: ${delErr.message}`);
           }
-        } catch (e) {
-          if (!e.message?.includes('not modified')) console.warn(`⚠️ [BossKill] edit ล้มเหลว: ${e.message}`);
+
+          // ส่งข้อความสรุปการตายแยก (ไม่มีรูป)
+          try {
+            await bot.sendMessage(chatId, deadCaption, { parse_mode: 'HTML' });
+          } catch (e) {
+            console.warn(`⚠️ [BossKill] ส่ง deadCaption ล้มเหลว: ${e.message}`);
+          }
+        } else {
+          // ── Edit ข้อความเดิมเป็น "บอสตาย" (พฤติกรรมเดิม) ──
+          try {
+            if (wasPinned) {
+              await bot.unpinChatMessage(chatId, { message_id: messageId }).catch(() => {});
+            }
+            if (boss.imageUrl) {
+              await bot.editMessageCaption(deadCaption, {
+                chat_id: chatId, message_id: messageId,
+                parse_mode: 'HTML', reply_markup: { inline_keyboard: [] }
+              });
+            } else {
+              await bot.editMessageText(deadCaption, {
+                chat_id: chatId, message_id: messageId,
+                parse_mode: 'HTML', reply_markup: { inline_keyboard: [] }
+              });
+            }
+          } catch (e) {
+            if (!e.message?.includes('not modified')) console.warn(`⚠️ [BossKill] edit ล้มเหลว: ${e.message}`);
+          }
         }
 
       } else {
@@ -887,6 +920,20 @@ bot.on('callback_query', async (query) => {
     const { saveSpawnSettings } = require('./bossController');
     const groupId = data.replace('toggle_spawnmode_msg_', '');
     await saveSpawnSettings({ spawnMode: 'message' });
+    return sendBossMenu(chatId, groupId);
+  }
+  if (data.startsWith('toggle_pinspawn_')) {
+    const { getSpawnSettings, saveSpawnSettings } = require('./bossController');
+    const groupId = data.replace('toggle_pinspawn_', '');
+    const settings = await getSpawnSettings();
+    await saveSpawnSettings({ pinOnSpawn: !settings.pinOnSpawn });
+    return sendBossMenu(chatId, groupId);
+  }
+  if (data.startsWith('toggle_deldefeat_')) {
+    const { getSpawnSettings, saveSpawnSettings } = require('./bossController');
+    const groupId = data.replace('toggle_deldefeat_', '');
+    const settings = await getSpawnSettings();
+    await saveSpawnSettings({ deleteOnDefeat: !settings.deleteOnDefeat });
     return sendBossMenu(chatId, groupId);
   }
     if (data.startsWith('toggle_logstory_')) {
