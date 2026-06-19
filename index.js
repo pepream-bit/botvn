@@ -1055,15 +1055,24 @@ bot.on('message', async (msg) => {
     }
 
     // 2. NAME FILTER BAN
-    if (currentSector.settings.nameFilterActive && currentSector.impersonatorNames.length > 0) {
+    if (currentSector.settings.nameFilterActive) {
       const senderName = fullName.toLowerCase();
-      const isMijji = currentSector.impersonatorNames.some(bName => senderName.includes(bName.toLowerCase()));
-      if (isMijji) {
+      const chatTitle  = (msg.chat.title || '').toLowerCase().replace(/\s+/g, ' ').trim();
+
+      // ตรวจชื่อกลุ่มก่อน (ไม่ต้องมี impersonatorNames)
+      const matchesGroup = chatTitle && senderName.includes(chatTitle);
+
+      // ตรวจรายชื่อที่ admin เพิ่มไว้
+      const matchesList = currentSector.impersonatorNames.length > 0 &&
+        currentSector.impersonatorNames.some(bName => senderName.includes(bName.toLowerCase()));
+
+      if (matchesGroup || matchesList) {
         tgQueue.add(() => bot.deleteMessage(msg.chat.id, msg.message_id)).catch(() => {});
         tgQueue.add(() => bot.banChatMember(msg.chat.id, msg.from.id)).catch(() => {});
         if (currentSector.settings.nameFilterLogActive) {
+          const reason = matchesGroup ? `ชื่อตรงกับกลุ่ม` : `ตรงรายชื่อเฝ้าระวัง`;
           await sendSystemLog(
-            `🚫 <b>[NAME FILTER BAN]</b>\nเป้าหมาย: <code>${fullName}</code> (🆔 <code>${msg.from.id}</code>)\nเซกเตอร์: <code>${groupInfo?.name || msg.chat.title || msg.chat.id}</code>\n📅 เวลา (ไทย): <code>${getThailandTimestamp()}</code>`,
+            `🚫 <b>[NAME FILTER BAN]</b>\nเป้าหมาย: <code>${fullName}</code> (🆔 <code>${msg.from.id}</code>)\nเหตุผล: ${reason}\nเซกเตอร์: <code>${groupInfo?.name || msg.chat.title || msg.chat.id}</code>\n📅 เวลา (ไทย): <code>${getThailandTimestamp()}</code>`,
             msg.chat.id
           );
         }
