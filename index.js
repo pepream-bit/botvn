@@ -1027,7 +1027,7 @@ bot.on('message', async (msg) => {
   if (!msg.from) return;
 
   // บันทึก username cache ทุกข้อความ
-  const fullName = `${msg.from.first_name || ''} ${msg.from.last_name || ''}`.trim() || msg.from.username || `ID:${msg.from.id}`;
+  const fullName = `${msg.from.first_name || ''} ${msg.from.last_name || ''}`.replace(/\s+/g, ' ').trim() || msg.from.username || `ID:${msg.from.id}`;
   usernameCache[`id_${msg.from.id}`] = { id: msg.from.id, name: fullName };
   if (msg.from.username) {
     usernameCache[msg.from.username.toLowerCase().replace('@', '')] = { id: msg.from.id, name: fullName };
@@ -1500,20 +1500,22 @@ bot.on('message', async (msg) => {
 
     // ── NameFilter ──
     case 'addname': {
-      if (!sector.impersonatorNames.includes(inputStr)) {
-        sector.impersonatorNames.push(inputStr);
+      const nameToAdd = inputStr.toLowerCase().trim();
+      if (!sector.impersonatorNames.includes(nameToAdd)) {
+        sector.impersonatorNames.push(nameToAdd);
         await saveSectorData(groupId);
       }
-      bot.sendMessage(chatId, `✅ เพิ่มคำว่า "<b>${inputStr}</b>" ลงในรายชื่อเฝ้าระวังแล้ว`, {
+      bot.sendMessage(chatId, `✅ เพิ่มคำว่า "<b>${nameToAdd}</b>" ลงในรายชื่อเฝ้าระวังแล้ว`, {
         parse_mode: 'HTML',
         reply_markup: { inline_keyboard: [[{ text: '⬅️ กลับหน้า Name Filter', callback_data: `menu_namefilter_${groupId}` }]] }
       });
       break;
     }
     case 'delname': {
-      sector.impersonatorNames = sector.impersonatorNames.filter(n => n !== inputStr);
+      const nameToDel = inputStr.toLowerCase().trim();
+      sector.impersonatorNames = sector.impersonatorNames.filter(n => n !== nameToDel);
       await saveSectorData(groupId);
-      bot.sendMessage(chatId, `✅ ลบคำว่า "<b>${inputStr}</b>" ออกจากรายชื่อเฝ้าระวังแล้ว`, {
+      bot.sendMessage(chatId, `✅ ลบคำว่า "<b>${nameToDel}</b>" ออกจากรายชื่อเฝ้าระวังแล้ว`, {
         parse_mode: 'HTML',
         reply_markup: { inline_keyboard: [[{ text: '⬅️ กลับหน้า Name Filter', callback_data: `menu_namefilter_${groupId}` }]] }
       });
