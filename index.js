@@ -1,88 +1,7 @@
 const TelegramBot = require('node-telegram-bot-api');
 const http = require('http');
 const mongoose = require('mongoose');
-const {
-  getBossById,
-  spawnBoss,
-  getSpawnSettings,
-  getRank,
-} = require('./bossController');
-const {
-  awardTag,
-  recordKill,
-} = require('./tagController');
 
-// ==========================================
-// ⚔️ ระบบบอส: State การสู้รบ (In-Memory)
-// ==========================================
-// activeBossFights: { bossId_string → { hp, maxHp, messageId, chatId, defeatMessageSent } }
-const activeBossFights = {};
-
-// HP bar debounce: { messageId → timeoutHandle }
-// ป้องกัน Telegram flood — edit ได้สูงสุดทุก HP_UPDATE_DELAY ms
-const hpUpdateDebounce = {};
-const HP_UPDATE_DELAY = 3000; // 3 วินาที
-
-function buildHpBar(current, max, length = 10) {
-  const pct = Math.max(0, current / max);
-  const filled = Math.round(pct * length);
-  return '🟥'.repeat(filled) + '⬛'.repeat(length - filled);
-}
-
-async function scheduleBossHpUpdate(bot, chatId, messageId, boss, currentHp) {
-  const key = `${chatId}_${messageId}`;
-  // ยกเลิก debounce เดิม (ถ้ามี) แล้วตั้งใหม่
-  if (hpUpdateDebounce[key]) clearTimeout(hpUpdateDebounce[key]);
-
-  hpUpdateDebounce[key] = setTimeout(async () => {
-    delete hpUpdateDebounce[key];
-    const fight = activeBossFights[boss._id.toString()];
-    if (!fight || fight.defeatMessageSent) return;
-
-    const latestHp = fight.hp;
-    const pct = Math.max(0, Math.round((latestHp / fight.maxHp) * 100));
-    const bar = buildHpBar(latestHp, fight.maxHp);
-
-    const lostPct = Math.round(((fight.maxHp - latestHp) / fight.maxHp) * 100);
-    const r = getRank(boss.rank);
-    const line = r.border.repeat(20);
-    const newCaption =
-      `${r.emoji} <b>[ ${r.label} BOSS กำลังถูกโจมตี! ]</b>\n` +
-      `${line}\n` +
-      `👾 <b>${boss.name}</b>\n` +
-      `❤️ <b>${latestHp.toLocaleString()}</b> / ${fight.maxHp.toLocaleString()} HP  (-${lostPct}%)\n` +
-      `${bar}\n` +
-      `🏆 รางวัล: <b>${boss.rewardTag}</b>\n` +
-      `${line}\n` +
-      `⚡️ กดเพื่อโจมตี! (ตีได้สูงสุด ${boss.maxDmgPct || 5}%/ครั้ง)`;
-
-    const keyboard = {
-      inline_keyboard: [[
-        { text: `⚔️ โจมตี ${boss.name}! (${latestHp.toLocaleString()} HP) | 👥${fight.attackers?.size || 0}`, callback_data: `boss_attack_${boss._id}` }
-      ]]
-    };
-
-    try {
-      // ถ้ามีสื่อแนบ (ทั้ง fileid และ URL) → ใช้ editMessageCaption
-      // ถ้าไม่มีสื่อ → ใช้ editMessageText
-      if (boss.imageUrl) {
-        await bot.editMessageCaption(newCaption, {
-          chat_id: chatId, message_id: messageId,
-          parse_mode: 'HTML', reply_markup: keyboard
-        });
-      } else {
-        await bot.editMessageText(newCaption, {
-          chat_id: chatId, message_id: messageId,
-          parse_mode: 'HTML', reply_markup: keyboard
-        });
-      }
-    } catch (e) {
-      if (!e.message?.includes('not modified')) {
-        console.warn(`⚠️ [BossHP] edit ล้มเหลว: ${e.message}`);
-      }
-    }
-  }, HP_UPDATE_DELAY);
-}
 
 // ==========================================
 // 🆕 ระบบคิวหน่วงเวลาอัจฉริยะ (Flood Wait Protection)
@@ -220,10 +139,10 @@ async function loadDatabase() {
           if (parts.length >= 2) initialGroups.push({ id: parseInt(parts[0].trim()), name: parts.slice(1).join(':').trim() });
         });
       }
-      gConfig = await GlobalConfig.create({ 
-        configId: 'main', 
+      gConfig = await GlobalConfig.create({
+        configId: 'main',
         whitelistIds: initialIds,
-        targetGroups: initialGroups 
+        targetGroups: initialGroups
       });
       console.log(`👥 สร้าง Whitelist ใหม่จาก .env: ${initialIds.join(', ')}`);
       console.log(`🛰️ สร้าง Target Groups ใหม่จาก .env: ${initialGroups.map(g => g.name).join(', ')}`);
@@ -394,10 +313,10 @@ async function sendSystemLog(message, groupIdOrChannelId = null) {
   if (sectorCache[key]) {
     const sectorLogChannel = sectorCache[key]?.settings?.logChannelId;
     if (!sectorLogChannel) return; // เซกเตอร์ไม่ได้ตั้ง Log Channel → ไม่ส่ง
-    bot.sendMessage(sectorLogChannel, message, { parse_mode: 'HTML' }).catch(() => {});
+    bot.sendMessage(sectorLogChannel, message, { parse_mode: 'HTML' }).catch(() => { });
   } else {
     // ส่งตรงไปยัง channel ที่ระบุ (เช่น LOG_CHANNEL_ID สำหรับ global actions)
-    bot.sendMessage(groupIdOrChannelId, message, { parse_mode: 'HTML' }).catch(() => {});
+    bot.sendMessage(groupIdOrChannelId, message, { parse_mode: 'HTML' }).catch(() => { });
   }
 }
 
@@ -437,12 +356,12 @@ function sendSectorsMenu(chatId) {
 function sendWhitelistMenu(chatId) {
   const wlText = globalWhitelist.length > 0
     ? globalWhitelist.map((id, i) => {
-        let name = 'ผู้ใช้นิรนาม';
-        for (const key in usernameCache) {
-          if (usernameCache[key].id === id) { name = usernameCache[key].name; break; }
-        }
-        return `${i + 1}. 🆔 <code>${id}</code> [${name}]`;
-      }).join('\n')
+      let name = 'ผู้ใช้นิรนาม';
+      for (const key in usernameCache) {
+        if (usernameCache[key].id === id) { name = usernameCache[key].name; break; }
+      }
+      return `${i + 1}. 🆔 <code>${id}</code> [${name}]`;
+    }).join('\n')
     : '<i>ไม่มีข้อมูล</i>';
   const notifyText = notifyUserIds.length > 0
     ? notifyUserIds.map(id => ` └ <code>${id}</code>`).join('\n')
@@ -475,7 +394,6 @@ function sendGroupMenu(chatId, groupId) {
     [{ text: '🛡️ ลงทัณฑ์ (Security)', callback_data: `menu_sec_${groupId}` }],
     [{ text: '🕵️ คัดกรองชื่อ (Name Filter)', callback_data: `menu_namefilter_${groupId}` }],
     [{ text: '📡 สื่อสาร (Comms)', callback_data: `menu_comms_${groupId}` }],
-    [{ text: '👾 ระบบบอส (Boss)', callback_data: `menu_boss_${groupId}` }],
     [{ text: '📜 แจ้งเตือน Log (Log Config)', callback_data: `menu_log_${groupId}` }],
     [{ text: '⚙️ ตั้งค่า (Settings)', callback_data: `menu_set_${groupId}` }],
     [{ text: '⬅️ กลับหน้าจอหลัก', callback_data: 'back_to_main' }]
@@ -486,60 +404,6 @@ function sendGroupMenu(chatId, groupId) {
 }
 
 
-// ──────────────────────────────────────────────────────────
-// 👾 Boss Menu — (Whitelist เท่านั้น)
-// ──────────────────────────────────────────────────────────
-async function sendBossMenu(chatId, groupId) {
-  const { getAllBosses, getSpawnSettings } = require('./bossController');
-  const group = TARGET_GROUPS.find(g => g.id == groupId);
-  const bosses = await getAllBosses();
-  const groupBosses = bosses.filter(b => String(b.targetGroupId) === String(groupId));
-  const settings = await getSpawnSettings();
-  const autoOn = settings.autoSpawnActive;
-  const modeLabel = settings.spawnMode === 'time'
-    ? `⏰ ทุก ${settings.spawnIntervalMinutes} นาที`
-    : `💬 ทุก ${settings.spawnEveryNMessages} ข้อความ`;
-
-  const { getRank: _getRank } = require('./bossController');
-  const bossList = groupBosses.length > 0
-    ? groupBosses.map((b, i) => {
-        const rk = _getRank(b.rank);
-        return `${i + 1}. ${b.isActive ? '🟢' : '🔴'} ${rk.emoji}<b>${b.name}</b> [${rk.label}]  ❤️${b.hp.toLocaleString()} HP`;
-      }).join('\n')
-    : '<i>ยังไม่มีบอสในเซกเตอร์นี้</i>';
-
-  const keyboard = [
-    [
-      { text: '➕ เพิ่มบอส', callback_data: `opt_addboss_${groupId}` },
-      { text: '➖ ลบบอส', callback_data: `opt_delboss_${groupId}` }
-    ],
-    [{ text: '⚔️ เสกบอสทันที (Manual Spawn)', callback_data: `opt_spawnboss_${groupId}` }],
-    [{ text: autoOn ? '🟢 Auto Spawn: ON' : '🔴 Auto Spawn: OFF', callback_data: `toggle_autospawn_${groupId}` }],
-    [
-      { text: settings.spawnMode === 'time' ? '✅ โหมด: เวลา' : '⬜ โหมด: เวลา', callback_data: `toggle_spawnmode_time_${groupId}` },
-      { text: settings.spawnMode === 'message' ? '✅ โหมด: ข้อความ' : '⬜ โหมด: ข้อความ', callback_data: `toggle_spawnmode_msg_${groupId}` }
-    ],
-    [{ text: `⏱️ ตั้งค่า Spawn (${modeLabel})`, callback_data: `opt_spawnconfig_${groupId}` }],
-    [
-      { text: settings.pinOnSpawn ? '📌 PIN เมื่อบอสเกิด: ON' : '📌 PIN เมื่อบอสเกิด: OFF', callback_data: `toggle_pinspawn_${groupId}` },
-      { text: settings.deleteOnDefeat ? '🗑️ ลบโพสต์เมื่อตาย: ON' : '🗑️ ลบโพสต์เมื่อตาย: OFF', callback_data: `toggle_deldefeat_${groupId}` }
-    ],
-    [{ text: '🏷️ แก้ไขฉายา / อายุฉายา', callback_data: `opt_bosstag_${groupId}` }],
-    [{ text: '⚔️ ตั้งค่า Damage % ต่อตี', callback_data: `opt_bossdmg_${groupId}` }],
-    [{ text: '🖼️ เปลี่ยนรูปบอส', callback_data: `opt_bossmedia_${groupId}` }],
-    [{ text: '🎚️ ตั้งค่า Rank บอส', callback_data: `opt_bossrank_${groupId}` }],
-    [{ text: '⬅️ ย้อนกลับ', callback_data: `select_group_${groupId}` }]
-  ];
-
-  bot.sendMessage(chatId,
-    `👾 <b>ระบบบอส — เซกเตอร์: ${group?.name}</b>\n` +
-    `━━━━━━━━━━━━━━━━━━━━\n` +
-    `${bossList}\n` +
-    `━━━━━━━━━━━━━━━━━━━━\n` +
-    `🤖 Auto Spawn: <b>${autoOn ? 'เปิด' : 'ปิด'}</b>  |  ${modeLabel}`,
-    { parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard } }
-  );
-}
 
 function sendLogMenu(chatId, groupId) {
   const group = TARGET_GROUPS.find(g => g.id == groupId);
@@ -662,194 +526,20 @@ bot.on('callback_query', async (query) => {
   const data = query.data;
 
   // ══════════════════════════════════════════
-  // ⚔️ BOSS ATTACK — เปิดให้ทุกคนกดได้ (ไม่ต้องอยู่ Whitelist)
-  // ══════════════════════════════════════════
-  if (data.startsWith('boss_attack_')) {
-    const bossId = data.replace('boss_attack_', '');
-    const attackerId = query.from.id;
-    const attackerUsername = query.from.username || '';
-    const attackerName = `${query.from.first_name || ''} ${query.from.last_name || ''}`.trim()
-      || query.from.username || `ID:${attackerId}`;
-    const chatId = query.message.chat.id;
-    const messageId = query.message.message_id;
-
-    try {
-      const boss = await getBossById(bossId);
-      if (!boss) {
-        return bot.answerCallbackQuery(query.id, { text: '❌ ไม่พบบอสนี้ในระบบ', show_alert: true });
-      }
-
-      // ดึง / สร้าง fight state
-      if (!activeBossFights[bossId]) {
-        activeBossFights[bossId] = {
-          hp: boss.hp,
-          maxHp: boss.hp,
-          messageId,
-          chatId,
-          defeatMessageSent: false,
-          attackers: new Set(),      // userId ที่ตีแล้ว (1 คน 1 ตี)
-          rewardPool: [],            // { userId, username, name } ของทุกคนที่ตี
-        };
-      }
-
-      const fight = activeBossFights[bossId];
-
-      if (fight.defeatMessageSent) {
-        return bot.answerCallbackQuery(query.id, { text: '💀 บอสตัวนี้ถูกกำจัดไปแล้ว!', show_alert: false });
-      }
-
-      // ── ตรวจว่าตีซ้ำหรือยัง ──
-      if (fight.attackers.has(attackerId)) {
-        return bot.answerCallbackQuery(query.id, {
-          text: '⚠️ คุณตีบอสตัวนี้ไปแล้ว! รอบอสตัวใหม่',
-          show_alert: false
-        });
-      }
-
-      // ลงทะเบียนผู้ตี
-      fight.attackers.add(attackerId);
-      fight.rewardPool.push({ userId: attackerId, username: attackerUsername, name: attackerName });
-
-      // คำนวณ damage (สุ่ม 1% – maxDmgPct% ของ maxHp)
-      const maxPct = (boss.maxDmgPct || 5) / 100;
-      const minPct = Math.min(0.01, maxPct);
-      const dmg = Math.max(1, Math.floor(fight.maxHp * (minPct + Math.random() * (maxPct - minPct))));
-      fight.hp = Math.max(0, fight.hp - dmg);
-
-      if (fight.hp <= 0) {
-        // ══ บอสตาย ══
-        fight.defeatMessageSent = true;
-
-        // ยกเลิก debounce HP ที่ค้างอยู่
-        const debounceKey = `${chatId}_${messageId}`;
-        if (hpUpdateDebounce[debounceKey]) {
-          clearTimeout(hpUpdateDebounce[debounceKey]);
-          delete hpUpdateDebounce[debounceKey];
-        }
-
-        // ลบ fight state หลัง 5 วินาที
-        setTimeout(() => delete activeBossFights[bossId], 5000);
-
-        // ── สุ่มผู้รับรางวัลจาก rewardPool ──
-        const pool = fight.rewardPool.length > 0 ? fight.rewardPool : [{ userId: attackerId, username: attackerUsername, name: attackerName }];
-        const winner = pool[Math.floor(Math.random() * pool.length)];
-        const attackerCount = pool.length;
-
-        // ส่ง callback ให้คนที่ตีตัวสุดท้ายก่อน (เร็ว)
-        bot.answerCallbackQuery(query.id, {
-          text: attackerId === winner.userId
-            ? `🎉 คุณโชคดี! ได้รับฉายา: ${boss.rewardTag}`
-            : `💥 บอสตายแล้ว! ผู้โชคดีคือ ${winner.name}`,
-          show_alert: true
-        }).catch(() => {});
-
-        // แจก Tag + บันทึกการฆ่าให้ winner
-        try {
-          await awardTag(
-            process.env.BOT_TOKEN, chatId,
-            winner.userId, winner.username, winner.name,
-            boss.rewardTag, boss.tagDurationHours
-          );
-          await recordKill(winner.userId, chatId, boss.name, winner.username, winner.name);
-        } catch (tagErr) {
-          console.warn(`⚠️ [BossKill] awardTag ล้มเหลว: ${tagErr.message}`);
-        }
-
-        // สร้างรายชื่อผู้ร่วมตี (แสดงสูงสุด 5 คน)
-        const attackerList = pool.slice(0, 5)
-          .map((a, i) => `${i + 1}. <a href="tg://user?id=${a.userId}">${a.name}</a>`)
-          .join('\n');
-        const moreText = pool.length > 5 ? `\n+${pool.length - 5} คน` : '';
-
-        // Edit ข้อความเป็น "บอสตาย"
-        const rd = getRank(boss.rank);
-        const dline = rd.border.repeat(20);
-        const deadCaption =
-          `💀 <b>[ ${rd.label} BOSS ถูกกำจัดแล้ว! ]</b>\n` +
-          `${dline}\n` +
-          `${rd.emoji} <b>${boss.name}</b> — ถูกสังหารแล้ว\n` +
-          `⚔️ ผู้ร่วมล่า ${attackerCount} คน:\n${attackerList}${moreText}\n` +
-          `${dline}\n` +
-          `🎲 ผู้โชคดี: <a href="tg://user?id=${winner.userId}">${winner.name}</a>\n` +
-          `🏆 ได้รับฉายา: <b>${boss.rewardTag}</b>\n` +
-          `${dline}`;
-
-        // โหลด settings เพื่อเช็ค deleteOnDefeat / pinOnSpawn
-        let bossSettings = null;
-        try { bossSettings = await getSpawnSettings(); } catch (_) {}
-        const shouldDelete   = bossSettings?.deleteOnDefeat ?? false;
-        const wasPinned      = bossSettings?.pinOnSpawn ?? false;
-
-        if (shouldDelete) {
-          // ── ลบโพสต์บอสทิ้งทันที (unpin ก่อนถ้าเคย PIN ไว้) ──
-          try {
-            if (wasPinned) {
-              await bot.unpinChatMessage(chatId, { message_id: messageId }).catch(() => {});
-            }
-            await bot.deleteMessage(chatId, messageId);
-            console.log(`🗑️ [BossKill] ลบโพสต์บอส "${boss.name}" (msg_id: ${messageId}) สำเร็จ`);
-          } catch (delErr) {
-            console.warn(`⚠️ [BossKill] ลบโพสต์ล้มเหลว: ${delErr.message}`);
-          }
-
-          // ส่งข้อความสรุปการตายแยก (ไม่มีรูป)
-          try {
-            await bot.sendMessage(chatId, deadCaption, { parse_mode: 'HTML' });
-          } catch (e) {
-            console.warn(`⚠️ [BossKill] ส่ง deadCaption ล้มเหลว: ${e.message}`);
-          }
-        } else {
-          // ── Edit ข้อความเดิมเป็น "บอสตาย" (พฤติกรรมเดิม) ──
-          try {
-            if (wasPinned) {
-              await bot.unpinChatMessage(chatId, { message_id: messageId }).catch(() => {});
-            }
-            if (boss.imageUrl) {
-              await bot.editMessageCaption(deadCaption, {
-                chat_id: chatId, message_id: messageId,
-                parse_mode: 'HTML', reply_markup: { inline_keyboard: [] }
-              });
-            } else {
-              await bot.editMessageText(deadCaption, {
-                chat_id: chatId, message_id: messageId,
-                parse_mode: 'HTML', reply_markup: { inline_keyboard: [] }
-              });
-            }
-          } catch (e) {
-            if (!e.message?.includes('not modified')) console.warn(`⚠️ [BossKill] edit ล้มเหลว: ${e.message}`);
-          }
-        }
-
-      } else {
-        // ══ บอสยังมีชีวิต — ตอบ callback ทันที แล้ว schedule HP update ภายหลัง ══
-        bot.answerCallbackQuery(query.id, {
-          text: `⚔️ โจมตี ${dmg.toLocaleString()} DMG! HP เหลือ ${fight.hp.toLocaleString()}`,
-          show_alert: false
-        }).catch(() => {});
-
-        // Debounce: อัปเดต HP bar ช้าลงเพื่อกันสแปม
-        await scheduleBossHpUpdate(bot, chatId, messageId, boss, fight.hp);
-      }
-
-    } catch (e) {
-      console.error(`❌ [BossAttack] ล้มเหลว: ${e.message}`);
-      bot.answerCallbackQuery(query.id, { text: '❌ เกิดข้อผิดพลาด กรุณาลองใหม่', show_alert: true }).catch(() => {});
-    }
-    return; // หยุด ไม่ตกไป whitelist guard
-  }
-
-  // ══════════════════════════════════════════
   // 🔒 Admin-only callbacks — ต้องอยู่ใน Whitelist
   // ══════════════════════════════════════════
   if (!globalWhitelist.includes(query.from.id)) {
     return bot.answerCallbackQuery(query.id, { text: 'ปฏิเสธคำสั่ง! ไม่อยู่ใน Whitelist', show_alert: true });
   }
 
+  // เคลียร์เซสชันทันทีเมื่อคลิกปุ่มใดๆ เพื่อป้องกันเซสชันค้างเวลาเปลี่ยนเมนู
+  monitorSessions.delete(query.from.id);
+
   const chatId = query.message.chat.id;
   const messageId = query.message.message_id;
 
-  bot.answerCallbackQuery(query.id).catch(() => {});
-  bot.deleteMessage(chatId, messageId).catch(() => {});
+  bot.answerCallbackQuery(query.id).catch(() => { });
+  bot.deleteMessage(chatId, messageId).catch(() => { });
 
   // ── Navigation ──
   if (data === 'back_to_main') return sendMainMenu(chatId);
@@ -862,7 +552,6 @@ bot.on('callback_query', async (query) => {
   if (data.startsWith('menu_namefilter_')) return sendNameFilterMenu(chatId, data.replace('menu_namefilter_', ''));
   if (data.startsWith('menu_comms_')) return sendCommsMenu(chatId, data.replace('menu_comms_', ''));
   if (data.startsWith('menu_set_')) return sendSettingsMenu(chatId, data.replace('menu_set_', ''));
-  if (data.startsWith('menu_boss_')) return sendBossMenu(chatId, data.replace('menu_boss_', ''));
 
   // ── Toggle Switches ──
   if (data.startsWith('toggle_storyban_')) {
@@ -885,7 +574,7 @@ bot.on('callback_query', async (query) => {
       tgQueue.add(() => bot.sendMessage(targetId,
         `🟢 <b>บอทออนไลน์แล้ว!</b>\n\n🤖 ระบบกลับมาทำงานตามปกติแล้ว\n✅ พร้อมให้บริการเต็มรูปแบบ`,
         { parse_mode: 'HTML' }
-      )).catch(() => {});
+      )).catch(() => { });
     });
     bot.answerCallbackQuery(query.id, { text: `🟢 กำลังทยอยส่ง 'บอทออนไลน์' ไปยัง ${notifyUserIds.length} ID...`, show_alert: false });
     return;
@@ -898,46 +587,12 @@ bot.on('callback_query', async (query) => {
       tgQueue.add(() => bot.sendMessage(targetId,
         `🔧 <b>ปิดปรับปรุงบอทชั่วคราว</b>\n\n⚙️ ระบบกำลังอยู่ในช่วงปรับปรุง\n⏳ กรุณารอสักครู่ แล้วกลับมาใหม่อีกครั้ง`,
         { parse_mode: 'HTML' }
-      )).catch(() => {});
+      )).catch(() => { });
     });
     bot.answerCallbackQuery(query.id, { text: `🔧 กำลังทยอยส่ง 'ปิดปรับปรุง' ไปยัง ${notifyUserIds.length} ID...`, show_alert: false });
     return;
   }
-  // ── Boss Toggles ──
-  if (data.startsWith('toggle_autospawn_')) {
-    const { getSpawnSettings, saveSpawnSettings } = require('./bossController');
-    const groupId = data.replace('toggle_autospawn_', '');
-    const settings = await getSpawnSettings();
-    await saveSpawnSettings({ autoSpawnActive: !settings.autoSpawnActive });
-    return sendBossMenu(chatId, groupId);
-  }
-  if (data.startsWith('toggle_spawnmode_time_')) {
-    const { saveSpawnSettings } = require('./bossController');
-    const groupId = data.replace('toggle_spawnmode_time_', '');
-    await saveSpawnSettings({ spawnMode: 'time' });
-    return sendBossMenu(chatId, groupId);
-  }
-  if (data.startsWith('toggle_spawnmode_msg_')) {
-    const { saveSpawnSettings } = require('./bossController');
-    const groupId = data.replace('toggle_spawnmode_msg_', '');
-    await saveSpawnSettings({ spawnMode: 'message' });
-    return sendBossMenu(chatId, groupId);
-  }
-  if (data.startsWith('toggle_pinspawn_')) {
-    const { getSpawnSettings, saveSpawnSettings } = require('./bossController');
-    const groupId = data.replace('toggle_pinspawn_', '');
-    const settings = await getSpawnSettings();
-    await saveSpawnSettings({ pinOnSpawn: !settings.pinOnSpawn });
-    return sendBossMenu(chatId, groupId);
-  }
-  if (data.startsWith('toggle_deldefeat_')) {
-    const { getSpawnSettings, saveSpawnSettings } = require('./bossController');
-    const groupId = data.replace('toggle_deldefeat_', '');
-    const settings = await getSpawnSettings();
-    await saveSpawnSettings({ deleteOnDefeat: !settings.deleteOnDefeat });
-    return sendBossMenu(chatId, groupId);
-  }
-    if (data.startsWith('toggle_logstory_')) {
+  if (data.startsWith('toggle_logstory_')) {
     const groupId = data.replace('toggle_logstory_', '');
     sectorCache[groupId].settings.storyBanLogActive = !sectorCache[groupId].settings.storyBanLogActive;
     await saveSectorData(groupId);
@@ -980,38 +635,30 @@ bot.on('callback_query', async (query) => {
     if (action.includes('sector')) backTarget = 'menu_sectors';
     if (action.includes('logch')) backTarget = `menu_log_${groupId}`;
     if (action.includes('notify')) backTarget = 'menu_whitelist';
-    if (['addboss','delboss','spawnboss','spawnconfig','bossdmg','bossmedia','bossrank','bosstag'].includes(action)) backTarget = `menu_boss_${groupId}`;
+    if (action === 'capture' || action === 'ann' || action === 'replylink') backTarget = `menu_comms_${groupId}`;
 
     const cancelMenu = { inline_keyboard: [[{ text: '❌ ยกเลิกและกลับ', callback_data: backTarget }]] };
 
     let promptMsg = `⌨️ <b>รอรับข้อมูลคำสั่ง [${action.toUpperCase()}]</b>\nโปรดพิมพ์ส่งเข้ามาที่แชทนี้...`;
-    if (action === 'ban')       promptMsg = `🔴 <b>[BAN PROTOCOL]</b>\nระบุเป้าหมาย:\n<code>@username เหตุผล</code> หรือ <code>ID เหตุผล</code>`;
-    if (action === 'unban')     promptMsg = `🟢 <b>[UNBAN PROTOCOL]</b>\nระบุเป้าหมาย:\n<code>@username เหตุผล</code> หรือ <code>ID เหตุผล</code>`;
-    if (action === 'warn')      promptMsg = `☢️ <b>[RADIATION WARN]</b>\nระบุเป้าหมาย (ครบ ${WARN_LIMIT} ครั้ง = AUTO-BAN):\n<code>@username เหตุผล</code> หรือ <code>ID เหตุผล</code>`;
-    if (action === 'unwarn')    promptMsg = `🧬 <b>[DETOX UNWARN]</b>\nระบุเป้าหมายที่จะล้างค่าเตือน 1 ขั้น:\n<code>@username</code> หรือ <code>ID</code>`;
+    if (action === 'ban') promptMsg = `🔴 <b>[BAN PROTOCOL]</b>\nระบุเป้าหมาย:\n<code>@username เหตุผล</code> หรือ <code>ID เหตุผล</code>`;
+    if (action === 'unban') promptMsg = `🟢 <b>[UNBAN PROTOCOL]</b>\nระบุเป้าหมาย:\n<code>@username เหตุผล</code> หรือ <code>ID เหตุผล</code>`;
+    if (action === 'warn') promptMsg = `☢️ <b>[RADIATION WARN]</b>\nระบุเป้าหมาย (ครบ ${WARN_LIMIT} ครั้ง = AUTO-BAN):\n<code>@username เหตุผล</code> หรือ <code>ID เหตุผล</code>`;
+    if (action === 'unwarn') promptMsg = `🧬 <b>[DETOX UNWARN]</b>\nระบุเป้าหมายที่จะล้างค่าเตือน 1 ขั้น:\n<code>@username</code> หรือ <code>ID</code>`;
     if (action === 'warncheck') promptMsg = `🔬 <b>[RADIATION SCANNER]</b>\nระบุเป้าหมายที่จะสแกน:\n<code>@username</code> หรือ <code>ID</code>`;
-    if (action === 'ann')       promptMsg = `📡 <b>[BEAM TRANSMISSION]</b>\nส่งข้อความ รูปภาพ ไฟล์ หรือวิดีโอที่ต้องการประกาศ:`;
-    if (action === 'capture')   promptMsg = `🧲 <b>[STEALTH CAPTURE]</b>\nส่งลิงก์ข้อความ Telegram:\n<code>https://t.me/c/xxxx/xxxx</code>`;
+    if (action === 'ann') promptMsg = `📡 <b>[BEAM TRANSMISSION]</b>\nส่งข้อความ รูปภาพ ไฟล์ หรือวิดีโอที่ต้องการประกาศ:`;
+    if (action === 'capture') promptMsg = `🧲 <b>[STEALTH CAPTURE]</b>\nส่งลิงก์ข้อความ Telegram ที่ต้องการดึงสื่อ (รองรับการส่งพร้อมกันหลายลิงก์ หรือปนอยู่ในตัวหนังสือยาวๆ):\n<code>https://t.me/c/xxxx/xxxx</code>`;
     if (action === 'replylink') promptMsg = `💬 <b>[REPLY LINK]</b>\nรูปแบบ: <code>[ลิงก์ข้อความ] [คำตอบกลับ]</code>`;
     if (action === 'quickjump') promptMsg = `🚀 <b>[QUICK JUMP]</b>\nส่งลิงก์ข้อความที่ต้องการสร้างปุ่มทางลัด:`;
-    if (action === 'addname')   promptMsg = `➕ <b>[เพิ่มชื่อเฝ้าระวัง]</b>\nพิมพ์ชื่อหรือคำที่ต้องการเพิ่ม (เช่น <code>THEWORLD V2</code>):`;
-    if (action === 'delname')   promptMsg = `➖ <b>[ลบชื่อเฝ้าระวัง]</b>\nพิมพ์ชื่อหรือคำที่ต้องการลบออก (ต้องตรงกับในระบบ):`;
-    if (action === 'addwl')      promptMsg = `➕ <b>[เพิ่ม Admin]</b>\nพิมพ์ <b>ID ตัวเลข</b> ของผู้ที่ต้องการตั้งเป็น Admin:`;
-    if (action === 'delwl')      promptMsg = `➖ <b>[ลบ Admin]</b>\nพิมพ์ <b>ID ตัวเลข</b> ของผู้ที่ต้องการปลดจาก Admin:`;
-    if (action === 'addnotify')  promptMsg = `➕ <b>[เพิ่ม ID รับข้อความแจ้งเตือน]</b>\nพิมพ์ <b>Telegram ID</b> ของบุคคล หรือ <b>ID กลุ่ม</b>\n(กลุ่มจะขึ้นต้นด้วย <code>-100</code> เช่น <code>-100123456789</code>):`;
-    if (action === 'delnotify')  promptMsg = `➖ <b>[ลบ ID รับข้อความแจ้งเตือน]</b>\nพิมพ์ <b>Telegram ID หรือ ID กลุ่ม</b> ที่ต้องการลบออกจากระบบ:`;
+    if (action === 'addname') promptMsg = `➕ <b>[เพิ่มชื่อเฝ้าระวัง]</b>\nพิมพ์ชื่อหรือคำที่ต้องการเพิ่ม (เช่น <code>THEWORLD V2</code>):`;
+    if (action === 'delname') promptMsg = `➖ <b>[ลบชื่อเฝ้าระวัง]</b>\nพิมพ์ชื่อหรือคำที่ต้องการลบออก (ต้องตรงกับในระบบ):`;
+    if (action === 'addwl') promptMsg = `➕ <b>[เพิ่ม Admin]</b>\nพิมพ์ <b>ID ตัวเลข</b> ของผู้ที่ต้องการตั้งเป็น Admin:`;
+    if (action === 'delwl') promptMsg = `➖ <b>[ลบ Admin]</b>\nพิมพ์ <b>ID ตัวเลข</b> ของผู้ที่ต้องการปลดจาก Admin:`;
+    if (action === 'addnotify') promptMsg = `➕ <b>[เพิ่ม ID รับข้อความแจ้งเตือน]</b>\nพิมพ์ <b>Telegram ID</b> ของบุคคล หรือ <b>ID กลุ่ม</b>\n(กลุ่มจะขึ้นต้นด้วย <code>-100</code> เช่น <code>-100123456789</code>):`;
+    if (action === 'delnotify') promptMsg = `➖ <b>[ลบ ID รับข้อความแจ้งเตือน]</b>\nพิมพ์ <b>Telegram ID หรือ ID กลุ่ม</b> ที่ต้องการลบออกจากระบบ:`;
     if (action === 'addsector') promptMsg = `➕ <b>[เพิ่มเซกเตอร์]</b>\nพิมพ์ <b>ข้อมูลเซกเตอร์</b> (รูปแบบ: <code>IDกลุ่ม:ชื่อกลุ่ม</code>)\nตัวอย่าง: <code>-10012345678:ดาวอังคาร</code>`;
     if (action === 'delsector') promptMsg = `➖ <b>[ลบเซกเตอร์]</b>\nพิมพ์ <b>ID ตัวเลข</b> ของเซกเตอร์ที่ต้องการลบ\n(เช่น: <code>-10012345678</code>):`;
-    if (action === 'setlogch')  promptMsg = `➕ <b>[ตั้งพิกัด Log Channel]</b>\nพิมพ์ <b>ID ตัวเลข</b> ของ Telegram Channel ที่ต้องการรับ Log ของกลุ่มนี้\n(ตัวอย่าง: <code>-100123456789</code>):`;
-    if (action === 'addboss')    promptMsg = `➕ <b>[เพิ่มบอสใหม่]</b>\nรูปแบบ (คั่นด้วย |):\n<code>ชื่อ|HP|ฉายา|ชั่วโมงฉายา|spawnRate%|maxDmg%|rank|URL_รูป</code>\n\n🎚️ ระดับบอส (rank):\n⚪ normal  🔵 rare  🟡 legend  🟣 mystic  🔴 limit\n\nตัวอย่าง: <code>Dragon|50000|🐉 นักล่ามังกร|24|60|5|legend|https://i.imgur.com/xxx.jpg</code>\nถ้าไม่ใส่ rank ใช้ค่าตั้งต้น normal`;
-    if (action === 'delboss')    promptMsg = `➖ <b>[ลบบอส]</b>\nพิมพ์ <b>ชื่อบอส</b> ที่ต้องการลบออกจากคลัง:`;
-    if (action === 'spawnboss')  promptMsg = `⚔️ <b>[เสกบอสทันที]</b>\nพิมพ์ <b>ชื่อบอส</b> ที่ต้องการเสกลงกลุ่ม (ต้องมีในคลังแล้ว):`;
-    if (action === 'bossrank')   promptMsg = `🎚️ <b>[ตั้งค่า Rank บอส]</b>\nพิมพ์: <code>ชื่อบอส|rank</code>\n\nระดับที่มี:\n⚪ <code>normal</code>  🔵 <code>rare</code>  🟡 <code>legend</code>  🟣 <code>mystic</code>  🔴 <code>limit</code>\n\nตัวอย่าง: <code>Dragon|legend</code>`;
-    if (action === 'bossmedia')  promptMsg = `🖼️ <b>[เปลี่ยนรูปบอส]</b>\nส่งข้อความ 2 บรรทัด:\nบรรทัด 1: <b>ชื่อบอส</b>\nบรรทัด 2: <b>ส่งรูป/GIF/วิดีโอ</b> (แนบพร้อมกัน หรือ caption = ชื่อบอส)\n\n💡 ส่งรูปโดยใส่ชื่อบอสเป็น caption ของรูปได้เลย`;
-    if (action === 'bossdmg')    promptMsg = `⚔️ <b>[ตั้งค่า Damage % ต่อตี]</b>\nพิมพ์รูปแบบ: <code>ชื่อบอส|maxDmg%</code>\nตัวอย่าง: <code>Dragon|5</code>\n→ แต่ละคนตีได้สูงสุด 5% ต่อครั้ง (สุ่มระหว่าง 1%–maxDmg%)`;
-    if (action === 'bosstag')    promptMsg = `🏷️ <b>[แก้ไขฉายาบอส]</b>\nรูปแบบ: <code>ชื่อบอส|ฉายาใหม่|ชั่วโมง</code>\n\n• <b>ชั่วโมง</b> = อายุฉายา (0 = ถาวร)\n\nตัวอย่าง: <code>Dragon|🐉 จอมมังกรสีเลือด|48</code>\nหรือถาวร: <code>Dragon|🐉 จอมมังกรสีเลือด|0</code>`;
-    if (action === 'spawnconfig') promptMsg = `⏱️ <b>[ตั้งค่า Spawn Interval]</b>\nโหมด time → พิมพ์จำนวน <b>นาที</b>\nโหมด message → พิมพ์จำนวน <b>ข้อความ</b>\nตัวอย่าง: <code>60</code>`;
-        if (action === 'dellogch')  promptMsg = `➖ <b>[ลบพิกัด Log Channel]</b>\nพิมพ์คำว่า <code>ยืนยัน</code> เพื่อลบพิกัด Channel เฉพาะของเซกเตอร์นี้\n(บอทจะกลับไปใช้แชนแนลกลางจาก .env แทน):`;
+    if (action === 'setlogch') promptMsg = `➕ <b>[ตั้งพิกัด Log Channel]</b>\nพิมพ์ <b>ID ตัวเลข</b> ของ Telegram Channel ที่ต้องการรับ Log ของกลุ่มนี้\n(ตัวอย่าง: <code>-100123456789</code>):`;
+    if (action === 'dellogch') promptMsg = `➖ <b>[ลบพิกัด Log Channel]</b>\nพิมพ์คำว่า <code>ยืนยัน</code> เพื่อลบพิกัด Channel เฉพาะของเซกเตอร์นี้\n(บอทจะกลับไปใช้แชนแนลกลางจาก .env แทน):`;
 
     bot.sendMessage(chatId, promptMsg, { parse_mode: 'HTML', reply_markup: cancelMenu })
       .then(sentMsg => {
@@ -1042,9 +689,9 @@ bot.on('message', async (msg) => {
 
     // 1. STORY BAN
     if (currentSector.settings.storyBanActive &&
-        (msg.forward_from_chat || msg.forward_from || msg.story || msg.forward_date)) {
-      tgQueue.add(() => bot.deleteMessage(msg.chat.id, msg.message_id)).catch(() => {});
-      tgQueue.add(() => bot.banChatMember(msg.chat.id, msg.from.id)).catch(() => {});
+      (msg.forward_from_chat || msg.forward_from || msg.story || msg.forward_date)) {
+      tgQueue.add(() => bot.deleteMessage(msg.chat.id, msg.message_id)).catch(() => { });
+      tgQueue.add(() => bot.banChatMember(msg.chat.id, msg.from.id)).catch(() => { });
       if (currentSector.settings.storyBanLogActive) {
         await sendSystemLog(
           `👻 <b>[STORYBAN TRIGGERED]</b>\nเป้าหมาย: <code>${fullName}</code> (🆔 <code>${msg.from.id}</code>)\nเซกเตอร์: <code>${groupInfo?.name || msg.chat.title || msg.chat.id}</code>\n📅 เวลา (ไทย): <code>${getThailandTimestamp()}</code>`,
@@ -1057,7 +704,7 @@ bot.on('message', async (msg) => {
     // 2. NAME FILTER BAN
     if (currentSector.settings.nameFilterActive) {
       const senderName = fullName.toLowerCase();
-      const chatTitle  = (msg.chat.title || '').toLowerCase().replace(/\s+/g, ' ').trim();
+      const chatTitle = (msg.chat.title || '').toLowerCase().replace(/\s+/g, ' ').trim();
 
       // ตรวจชื่อกลุ่มก่อน (ไม่ต้องมี impersonatorNames)
       const matchesGroup = chatTitle && senderName.includes(chatTitle);
@@ -1067,8 +714,8 @@ bot.on('message', async (msg) => {
         currentSector.impersonatorNames.some(bName => senderName.includes(bName.toLowerCase()));
 
       if (matchesGroup || matchesList) {
-        tgQueue.add(() => bot.deleteMessage(msg.chat.id, msg.message_id)).catch(() => {});
-        tgQueue.add(() => bot.banChatMember(msg.chat.id, msg.from.id)).catch(() => {});
+        tgQueue.add(() => bot.deleteMessage(msg.chat.id, msg.message_id)).catch(() => { });
+        tgQueue.add(() => bot.banChatMember(msg.chat.id, msg.from.id)).catch(() => { });
         if (currentSector.settings.nameFilterLogActive) {
           const reason = matchesGroup ? `ชื่อตรงกับกลุ่ม` : `ตรงรายชื่อเฝ้าระวัง`;
           await sendSystemLog(
@@ -1096,9 +743,9 @@ bot.on('message', async (msg) => {
   const delTime = getDeleteTime(groupId);
   const inputStr = msg.text ? msg.text.trim() : '';
 
-  // ลบข้อความที่พิมพ์เข้ามา (ยกเว้น ann, bossmedia ที่ต้องใช้ไฟล์/ข้อความนั้น)
-  if (action !== 'ann' && action !== 'bossmedia') bot.deleteMessage(msg.chat.id, msg.message_id).catch(() => {});
-  if (promptMsgId) bot.deleteMessage(chatId, promptMsgId).catch(() => {});
+  // ลบข้อความที่พิมพ์เข้ามา (ยกเว้น ann ที่ต้องใช้ไฟล์/ข้อความนั้น)
+  if (action !== 'ann') bot.deleteMessage(msg.chat.id, msg.message_id).catch(() => { });
+  if (promptMsgId) bot.deleteMessage(chatId, promptMsgId).catch(() => { });
   monitorSessions.delete(msg.from.id);
 
   const finishMenu = { inline_keyboard: [[{ text: '⬅️ กลับสู่เมนูเซกเตอร์', callback_data: `select_group_${groupId}` }]] };
@@ -1108,260 +755,6 @@ bot.on('message', async (msg) => {
   let targetInput, reason, spaceIdx, resolved, targetUserId, targetName;
 
   switch (action) {
-
-
-    // ── Boss Management ──
-    case 'addboss': {
-      const { createBoss } = require('./bossController');
-      const parts = inputStr.split('|').map(s => s.trim());
-      const bossName = parts[0];
-      if (!bossName) {
-        bot.sendMessage(chatId, '❌ ต้องระบุชื่อบอสอย่างน้อย', { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⬅️ กลับ', callback_data: `menu_boss_${groupId}` }]] } });
-        break;
-      }
-      try {
-        const validRanks = ['normal','rare','legend','mystic','limit'];
-        const rawRank = parts[6] ? parts[6].trim().toLowerCase() : 'normal';
-        const bossRank = validRanks.includes(rawRank) ? rawRank : 'normal';
-        const rawUrl = parts[7] ? parts[7].trim() : null;
-        if (rawUrl && !rawUrl.startsWith('https://')) {
-          bot.sendMessage(chatId, '❌ URL รูปต้องขึ้นต้นด้วย https://\n💡 หรือใช้ปุ่ม "🖼️ เปลี่ยนรูปบอส" เพื่ออัปโหลดรูปโดยตรง', {
-            parse_mode: 'HTML',
-            reply_markup: { inline_keyboard: [[{ text: '⬅️ กลับ', callback_data: `menu_boss_${groupId}` }]] }
-          });
-          break;
-        }
-        const boss = await createBoss({
-          name:             bossName,
-          hp:               parts[1] ? parseInt(parts[1]) : 10000,
-          rewardTag:        parts[2] || '👑 นักล่าบอส',
-          tagDurationHours: parts[3] ? parseInt(parts[3]) : 24,
-          spawnRate:        parts[4] ? parseInt(parts[4]) : 50,
-          maxDmgPct:        parts[5] ? parseFloat(parts[5]) : 5,
-          rank:             bossRank,
-          imageUrl:         rawUrl || null,
-          targetGroupId:    parseInt(groupId),
-        });
-        bot.sendMessage(chatId,
-          (() => { const rk = getRank(boss.rank); return `✅ <b>เพิ่มบอสสำเร็จ!</b>\n${rk.emoji} ระดับ: <b>${rk.label}</b>\n👾 ชื่อ: <b>${boss.name}</b>\n❤️ HP: ${boss.hp.toLocaleString()}\n🏆 Tag: ${boss.rewardTag}\n⏱️ อายุฉายา: ${boss.tagDurationHours}h\n🎲 Rate: ${boss.spawnRate}%\n⚔️ Dmg สูงสุด: ${boss.maxDmgPct}%/ตี\n🖼️ รูป: ${boss.imageUrl ? '✅' : '❌ ไม่มี'}`; })(),
-          { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⬅️ กลับหน้าบอส', callback_data: `menu_boss_${groupId}` }]] } }
-        );
-      } catch (e) {
-        bot.sendMessage(chatId, `❌ สร้างบอสล้มเหลว: ${e.message}`, { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⬅️ กลับ', callback_data: `menu_boss_${groupId}` }]] } });
-      }
-      break;
-    }
-
-    case 'delboss': {
-      const { getAllBosses, deleteBoss } = require('./bossController');
-      const bosses = await getAllBosses();
-      const target = bosses.find(b => b.name.toLowerCase() === inputStr.toLowerCase() && String(b.targetGroupId) === String(groupId));
-      if (!target) {
-        bot.sendMessage(chatId, `❌ ไม่พบบอสชื่อ "<b>${inputStr}</b>" ในเซกเตอร์นี้`, { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⬅️ กลับ', callback_data: `menu_boss_${groupId}` }]] } });
-        break;
-      }
-      await deleteBoss(target._id);
-      bot.sendMessage(chatId, `✅ ลบบอส "<b>${target.name}</b>" เรียบร้อยแล้ว`, { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⬅️ กลับหน้าบอส', callback_data: `menu_boss_${groupId}` }]] } });
-      break;
-    }
-
-    case 'spawnboss': {
-      const { getAllBosses } = require('./bossController');
-      const bosses = await getAllBosses();
-      const target = bosses.find(b => b.name.toLowerCase() === inputStr.toLowerCase() && String(b.targetGroupId) === String(groupId));
-      if (!target) {
-        bot.sendMessage(chatId, `❌ ไม่พบบอสชื่อ "<b>${inputStr}</b>" ในเซกเตอร์นี้`, { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⬅️ กลับ', callback_data: `menu_boss_${groupId}` }]] } });
-        break;
-      }
-      try {
-        await spawnBoss(bot, target, tgQueue);
-        bot.sendMessage(chatId, `✅ เสก <b>${target.name}</b> ลงกลุ่มสำเร็จ!`, { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⬅️ กลับหน้าบอส', callback_data: `menu_boss_${groupId}` }]] } });
-      } catch (e) {
-        bot.sendMessage(chatId, `❌ Spawn ล้มเหลว: ${e.message}`, { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⬅️ กลับ', callback_data: `menu_boss_${groupId}` }]] } });
-      }
-      break;
-    }
-
-
-
-    case 'bossmedia': {
-      const { getAllBosses, updateBoss } = require('./bossController');
-
-      // ดึง file_id จากรูป/GIF/วิดีโอที่แนบมา
-      let fileId = null;
-      let mediaType = null;
-      if (msg.photo && msg.photo.length > 0) {
-        // photo array — เลือก resolution สูงสุด (ตัวสุดท้าย)
-        fileId = msg.photo[msg.photo.length - 1].file_id;
-        mediaType = 'photo';
-      } else if (msg.animation) {
-        fileId = msg.animation.file_id;
-        mediaType = 'animation';
-      } else if (msg.video) {
-        fileId = msg.video.file_id;
-        mediaType = 'video';
-      } else if (msg.document && msg.document.mime_type && msg.document.mime_type.startsWith('image/')) {
-        fileId = msg.document.file_id;
-        mediaType = 'photo';
-      }
-
-      // ชื่อบอส — อ่านจาก caption ของรูป หรือ inputStr (ถ้าส่งข้อความ)
-      const bossNameRaw = (msg.caption || inputStr || '').trim();
-
-      if (!fileId) {
-        bot.deleteMessage(msg.chat.id, msg.message_id).catch(() => {});
-        bot.sendMessage(chatId,
-          '❌ ไม่พบไฟล์รูป/GIF/วิดีโอ\nกรุณาส่งรูปพร้อม caption = ชื่อบอส',
-          { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⬅️ กลับ', callback_data: `menu_boss_${groupId}` }]] } }
-        );
-        break;
-      }
-      if (!bossNameRaw) {
-        bot.deleteMessage(msg.chat.id, msg.message_id).catch(() => {});
-        bot.sendMessage(chatId,
-          '❌ ต้องระบุชื่อบอส (ใส่เป็น caption ของรูป หรือพิมพ์ชื่อบอสมา)',
-          { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⬅️ กลับ', callback_data: `menu_boss_${groupId}` }]] } }
-        );
-        break;
-      }
-
-      const bosses = await getAllBosses();
-      const target = bosses.find(b =>
-        b.name.toLowerCase() === bossNameRaw.toLowerCase() &&
-        String(b.targetGroupId) === String(groupId)
-      );
-      if (!target) {
-        bot.deleteMessage(msg.chat.id, msg.message_id).catch(() => {});
-        bot.sendMessage(chatId, `❌ ไม่พบบอสชื่อ "<b>${bossNameRaw}</b>" ในเซกเตอร์นี้`, {
-          parse_mode: 'HTML',
-          reply_markup: { inline_keyboard: [[{ text: '⬅️ กลับ', callback_data: `menu_boss_${groupId}` }]] }
-        });
-        break;
-      }
-
-      // เก็บเป็น file_id:type เพื่อให้ spawnBoss รู้ว่าส่งด้วย method ไหน
-      await updateBoss(target._id, { imageUrl: `fileid:${mediaType}:${fileId}` });
-      bot.deleteMessage(msg.chat.id, msg.message_id).catch(() => {});
-      bot.sendMessage(chatId,
-        `✅ อัปเดตรูปบอส <b>${target.name}</b> สำเร็จ!\n🖼️ ประเภท: ${mediaType}\n📎 File ID: <code>${fileId.slice(0, 20)}...</code>`,
-        { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⬅️ กลับหน้าบอส', callback_data: `menu_boss_${groupId}` }]] } }
-      );
-      break;
-    }
-
-
-    case 'bossrank': {
-      const { getAllBosses, updateBoss } = require('./bossController');
-      const validRanks = ['normal','rare','legend','mystic','limit'];
-      const parts = inputStr.split('|').map(s => s.trim());
-      const targetName = parts[0];
-      const newRank = (parts[1] || '').toLowerCase();
-      if (!targetName || !validRanks.includes(newRank)) {
-        bot.sendMessage(chatId, '❌ รูปแบบไม่ถูกต้อง หรือ rank ไม่ถูกต้อง\nระดับที่ใช้ได้: normal, rare, legend, mystic, limit', {
-          parse_mode: 'HTML',
-          reply_markup: { inline_keyboard: [[{ text: '⬅️ กลับ', callback_data: `menu_boss_${groupId}` }]] }
-        });
-        break;
-      }
-      const bosses = await getAllBosses();
-      const target = bosses.find(b => b.name.toLowerCase() === targetName.toLowerCase() && String(b.targetGroupId) === String(groupId));
-      if (!target) {
-        bot.sendMessage(chatId, `❌ ไม่พบบอสชื่อ "<b>${targetName}</b>"`, {
-          parse_mode: 'HTML',
-          reply_markup: { inline_keyboard: [[{ text: '⬅️ กลับ', callback_data: `menu_boss_${groupId}` }]] }
-        });
-        break;
-      }
-      await updateBoss(target._id, { rank: newRank });
-      const rk = getRank(newRank);
-      bot.sendMessage(chatId,
-        `✅ อัปเดต Rank สำเร็จ\n👾 บอส: <b>${target.name}</b>\n${rk.emoji} Rank: <b>${rk.label}</b>`,
-        { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⬅️ กลับหน้าบอส', callback_data: `menu_boss_${groupId}` }]] } }
-      );
-      break;
-    }
-
-    case 'bossdmg': {
-      const { getAllBosses, updateBoss } = require('./bossController');
-      const parts = inputStr.split('|').map(s => s.trim());
-      const targetName = parts[0];
-      const newPct = parseFloat(parts[1]);
-      if (!targetName || isNaN(newPct) || newPct <= 0 || newPct > 100) {
-        bot.sendMessage(chatId, '❌ รูปแบบไม่ถูกต้อง หรือค่า % ต้องอยู่ระหว่าง 0.1–100', {
-          parse_mode: 'HTML',
-          reply_markup: { inline_keyboard: [[{ text: '⬅️ กลับ', callback_data: `menu_boss_${groupId}` }]] }
-        });
-        break;
-      }
-      const bosses = await getAllBosses();
-      const target = bosses.find(b => b.name.toLowerCase() === targetName.toLowerCase() && String(b.targetGroupId) === String(groupId));
-      if (!target) {
-        bot.sendMessage(chatId, `❌ ไม่พบบอสชื่อ "<b>${targetName}</b>" ในเซกเตอร์นี้`, {
-          parse_mode: 'HTML',
-          reply_markup: { inline_keyboard: [[{ text: '⬅️ กลับ', callback_data: `menu_boss_${groupId}` }]] }
-        });
-        break;
-      }
-      await updateBoss(target._id, { maxDmgPct: newPct });
-      bot.sendMessage(chatId,
-        `✅ อัปเดต Damage % สำเร็จ\n👾 บอส: <b>${target.name}</b>\n⚔️ แต่ละคนตีได้ <b>1%–${newPct}%</b> ต่อครั้ง`,
-        { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⬅️ กลับหน้าบอส', callback_data: `menu_boss_${groupId}` }]] } }
-      );
-      break;
-    }
-
-    case 'bosstag': {
-      const { getAllBosses, updateBoss } = require('./bossController');
-      const parts = inputStr.split('|').map(s => s.trim());
-      const targetName  = parts[0];
-      const newTag      = parts[1];
-      const newDuration = parts[2] !== undefined ? parseFloat(parts[2]) : NaN;
-
-      if (!targetName || !newTag || isNaN(newDuration) || newDuration < 0) {
-        bot.sendMessage(chatId,
-          '❌ รูปแบบไม่ถูกต้อง\nตัวอย่าง: <code>Dragon|🐉 จอมมังกรสีเลือด|48</code>\nหรือถาวร: <code>Dragon|🐉 จอมมังกรสีเลือด|0</code>',
-          { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⬅️ กลับ', callback_data: `menu_boss_${groupId}` }]] } }
-        );
-        break;
-      }
-      const bosses = await getAllBosses();
-      const target = bosses.find(b =>
-        b.name.toLowerCase() === targetName.toLowerCase() &&
-        String(b.targetGroupId) === String(groupId)
-      );
-      if (!target) {
-        bot.sendMessage(chatId, `❌ ไม่พบบอสชื่อ "<b>${targetName}</b>" ในเซกเตอร์นี้`, {
-          parse_mode: 'HTML',
-          reply_markup: { inline_keyboard: [[{ text: '⬅️ กลับ', callback_data: `menu_boss_${groupId}` }]] }
-        });
-        break;
-      }
-      await updateBoss(target._id, { rewardTag: newTag, tagDurationHours: newDuration });
-      const durText = newDuration === 0 ? '♾️ ถาวร' : `⏳ ${newDuration} ชั่วโมง`;
-      bot.sendMessage(chatId,
-        `✅ อัปเดตฉายาสำเร็จ\n👾 บอส: <b>${target.name}</b>\n🏷️ ฉายาใหม่: <b>${newTag}</b>\n${durText}`,
-        { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⬅️ กลับหน้าบอส', callback_data: `menu_boss_${groupId}` }]] } }
-      );
-      break;
-    }
-
-    case 'spawnconfig': {
-      const { getSpawnSettings, saveSpawnSettings } = require('./bossController');
-      const val = parseInt(inputStr);
-      if (isNaN(val) || val < 1) {
-        bot.sendMessage(chatId, '❌ ต้องเป็นตัวเลขจำนวนเต็มมากกว่า 0', { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⬅️ กลับ', callback_data: `menu_boss_${groupId}` }]] } });
-        break;
-      }
-      const settings = await getSpawnSettings();
-      if (settings.spawnMode === 'time') {
-        await saveSpawnSettings({ spawnIntervalMinutes: val });
-        bot.sendMessage(chatId, `✅ ตั้งค่า Auto Spawn ทุก <b>${val} นาที</b> สำเร็จ`, { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⬅️ กลับหน้าบอส', callback_data: `menu_boss_${groupId}` }]] } });
-      } else {
-        await saveSpawnSettings({ spawnEveryNMessages: val });
-        bot.sendMessage(chatId, `✅ ตั้งค่า Auto Spawn ทุก <b>${val} ข้อความ</b> สำเร็จ`, { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⬅️ กลับหน้าบอส', callback_data: `menu_boss_${groupId}` }]] } });
-      }
-      break;
-    }
 
     // ── Sector Management ──
     case 'addsector': {
@@ -1535,8 +928,8 @@ bot.on('message', async (msg) => {
     case 'ann': {
       try {
         const copiedMsg = await bot.copyMessage(targetGroupId, msg.chat.id, msg.message_id);
-        bot.deleteMessage(msg.chat.id, msg.message_id).catch(() => {});
-        if (delTime > 0) setTimeout(() => { bot.deleteMessage(targetGroupId, copiedMsg.message_id).catch(() => {}); }, delTime);
+        bot.deleteMessage(msg.chat.id, msg.message_id).catch(() => { });
+        if (delTime > 0) setTimeout(() => { bot.deleteMessage(targetGroupId, copiedMsg.message_id).catch(() => { }); }, delTime);
 
         const msgLink = buildMessageLink(targetGroupId, copiedMsg.message_id);
         const inlineKey = [[{ text: '⬅️ กลับสู่เมนูเซกเตอร์', callback_data: `select_group_${groupId}` }]];
@@ -1550,33 +943,78 @@ bot.on('message', async (msg) => {
     }
 
     case 'capture': {
-      const loadingMsg = await bot.sendMessage(chatId, `⏳ <b>[STEALTH CAPTURE]</b> กำลังดึงสื่อ...`, { parse_mode: 'HTML' });
-      try {
-        let tChatId, mId;
-        if (inputStr.includes('/c/')) {
-          const parts = inputStr.split('/');
-          mId = parseInt(parts.pop());
-          tChatId = parseInt('-100' + parts.pop());
-        } else {
-          const parts = inputStr.split('/');
-          mId = parseInt(parts.pop());
-          tChatId = '@' + parts.pop();
-        }
-        if (!tChatId || isNaN(mId)) throw new Error('รูปแบบลิงก์ไม่ถูกต้อง');
+      // ค้นหาลิงก์ Telegram ทั้งหมดในข้อความ
+      const linkRegex = /https?:\/\/t\.me\/(?:c\/)?([a-zA-Z0-9_]+)\/(\d+)/g;
+      const matches = [...inputStr.matchAll(linkRegex)];
 
-        await bot.copyMessage(msg.from.id, tChatId, mId);
-        bot.deleteMessage(chatId, loadingMsg.message_id).catch(() => {});
-        bot.sendMessage(chatId, `🛸 <b>ดึงสื่อสำเร็จ!</b> ส่งตรงไปยังกล่องข้อความของคุณแล้ว`, {
-          parse_mode: 'HTML',
-          reply_markup: { inline_keyboard: [
-            [{ text: '🔗 เปิดดูต้นทาง', url: inputStr }],
-            [{ text: '⬅️ กลับสู่เมนูเซกเตอร์', callback_data: `select_group_${groupId}` }]
-          ]}
-        });
-      } catch (e) {
-        bot.deleteMessage(chatId, loadingMsg.message_id).catch(() => {});
-        bot.sendMessage(chatId, `❌ <b>ดึงสื่อล้มเหลว:</b> <code>${e.message}</code>`, { parse_mode: 'HTML', reply_markup: finishMenu });
+      if (matches.length === 0) {
+        const errorPrompt = await bot.sendMessage(chatId,
+          `⚠️ <b>ไม่พบลิงก์ข้อความ Telegram ในข้อความของคุณ</b>\n` +
+          `💡 กรุณาส่งลิงก์ในรูปแบบ: <code>https://t.me/c/xxxx/xxxx</code>\n\n` +
+          `🧲 ส่งข้อความที่มีลิงก์อีกครั้ง หรือกดปุ่มเสร็จสิ้นด้านล่าง:`,
+          {
+            parse_mode: 'HTML',
+            reply_markup: {
+              inline_keyboard: [[{ text: '⬅️ เสร็จสิ้นและกลับ', callback_data: `menu_comms_${groupId}` }]]
+            }
+          }
+        );
+        monitorSessions.set(msg.from.id, { chatId, groupId, action, promptMsgId: errorPrompt.message_id });
+        break;
       }
+
+      const loadingMsg = await bot.sendMessage(chatId, `⏳ <b>[STEALTH CAPTURE]</b> กำลังดึงสื่อ (${matches.length} รายการ)...`, { parse_mode: 'HTML' });
+      const results = [];
+
+      for (const match of matches) {
+        const fullUrl = match[0];
+        const channelPart = match[1];
+        const mId = parseInt(match[2]);
+
+        let tChatId;
+        if (fullUrl.includes('/c/')) {
+          tChatId = parseInt('-100' + channelPart);
+        } else {
+          tChatId = '@' + channelPart;
+        }
+
+        try {
+          await bot.copyMessage(msg.from.id, tChatId, mId);
+          results.push({ url: fullUrl, success: true });
+        } catch (e) {
+          results.push({ url: fullUrl, success: false, error: e.message });
+        }
+      }
+
+      bot.deleteMessage(chatId, loadingMsg.message_id).catch(() => { });
+
+      const successCount = results.filter(r => r.success).length;
+      const failCount = results.length - successCount;
+
+      let reportText = `🛸 <b>[STEALTH CAPTURE REPORT]</b>\n`;
+      reportText += `━━━━━━━━━━━━━━━━━━━━\n`;
+      reportText += `✅ ดึงสำเร็จ: <b>${successCount} / ${results.length}</b> รายการ\n`;
+      if (failCount > 0) {
+        reportText += `❌ ล้มเหลว: <b>${failCount}</b> รายการ\n`;
+        results.forEach((r, idx) => {
+          if (!r.success) {
+            reportText += ` └ ลิงก์ที่ ${idx + 1}: <code>${r.error}</code>\n`;
+          }
+        });
+      }
+      reportText += `━━━━━━━━━━━━━━━━━━━━\n\n`;
+      reportText += `💡 สื่อทั้งหมดถูกส่งไปยังแชทส่วนตัวของคุณแล้ว\n\n`;
+      reportText += `🧲 ส่งลิงก์เพิ่มเติมต่อได้ทันที หรือกดปุ่มเสร็จสิ้นเพื่อสิ้นสุดเซสชัน:`;
+
+      const successPrompt = await bot.sendMessage(chatId, reportText, {
+        parse_mode: 'HTML',
+        reply_markup: {
+          inline_keyboard: [[{ text: '⬅️ เสร็จสิ้นและกลับ', callback_data: `menu_comms_${groupId}` }]]
+        }
+      });
+
+      // ตั้งเซสชันใหม่เพื่อให้ทำงานได้ต่อเนื่อง
+      monitorSessions.set(msg.from.id, { chatId, groupId, action, promptMsgId: successPrompt.message_id });
       break;
     }
 
@@ -1596,7 +1034,7 @@ bot.on('message', async (msg) => {
         if (!tChatId || isNaN(mId)) throw new Error('ลิงก์ข้อความไม่สมบูรณ์');
 
         const sentMsg = await bot.sendMessage(targetGroupId, replyText, { reply_to_message_id: mId });
-        if (delTime > 0) setTimeout(() => { bot.deleteMessage(targetGroupId, sentMsg.message_id).catch(() => {}); }, delTime);
+        if (delTime > 0) setTimeout(() => { bot.deleteMessage(targetGroupId, sentMsg.message_id).catch(() => { }); }, delTime);
 
         const msgLink = buildMessageLink(targetGroupId, sentMsg.message_id);
         const inlineKey = [[{ text: '⬅️ กลับสู่เมนูเซกเตอร์', callback_data: `select_group_${groupId}` }]];
@@ -1634,7 +1072,7 @@ bot.on('message', async (msg) => {
             `☢️ <b>[ RADIATION OVERLOAD - AUTO BAN ]</b>\n👤 <a href="tg://user?id=${targetUserId}">${targetName}</a>\n☢️ รังสีสะสม: [${warnBar}] ${currentWarn}/${WARN_LIMIT}\n💥 เหตุผล: <code>${reason}</code>\n☠️ AUTO-BAN ทันที`,
             { parse_mode: 'HTML' }
           );
-          if (delTime > 0) setTimeout(() => { bot.deleteMessage(targetGroupId, m.message_id).catch(() => {}); }, delTime);
+          if (delTime > 0) setTimeout(() => { bot.deleteMessage(targetGroupId, m.message_id).catch(() => { }); }, delTime);
 
           await sendSystemLog(`📜 <b>[ AUTO-BAN LOG ]</b>\nเซกเตอร์: ${groupName}\nเป้าหมาย: ${targetName} (🆔 <code>${targetUserId}</code>)\nสาเหตุ: ${reason}\n📅 เวลา: <code>${getThailandTimestamp()}</code>`, groupId);
           bot.sendMessage(chatId, `☢️ <b>Warn ครบเกณฑ์ — AUTO-BAN สำเร็จ!</b>`, { parse_mode: 'HTML', reply_markup: finishMenu });
@@ -1644,7 +1082,7 @@ bot.on('message', async (msg) => {
             `☢️ <b>[ BIOHAZARD WARNING ]</b>\n👤 <a href="tg://user?id=${targetUserId}">${targetName}</a>\n☢️ รังสีสะสม: [${warnBar}] ${currentWarn}/${WARN_LIMIT}\n⚠️ เหตุผล: <code>${reason}</code>\n🚨 อีก <b>${rem} ครั้ง</b> จะถูก AUTO-BAN`,
             { parse_mode: 'HTML' }
           );
-          if (delTime > 0) setTimeout(() => { bot.deleteMessage(targetGroupId, m.message_id).catch(() => {}); }, delTime);
+          if (delTime > 0) setTimeout(() => { bot.deleteMessage(targetGroupId, m.message_id).catch(() => { }); }, delTime);
 
           await sendSystemLog(`📜 <b>[ WARN LOG ]</b>\nเซกเตอร์: ${groupName}\nเป้าหมาย: ${targetName} (🆔 <code>${targetUserId}</code>) | ${currentWarn}/${WARN_LIMIT}\nสาเหตุ: ${reason}\n📅 เวลา: <code>${getThailandTimestamp()}</code>`, groupId);
           bot.sendMessage(chatId, `☢️ <b>Warn สำเร็จ [${currentWarn}/${WARN_LIMIT}]</b>`, { parse_mode: 'HTML', reply_markup: finishMenu });
@@ -1680,7 +1118,7 @@ bot.on('message', async (msg) => {
           `🧬 <b>[ DETOXIFICATION COMPLETE ]</b>\n👤 <a href="tg://user?id=${targetUserId}">${targetName}</a>\n☢️ รังสีคงเหลือ: [${unwarnBar}] ${currentWarn}/${WARN_LIMIT}\n💉 บันทึก: <code>${reason}</code>`,
           { parse_mode: 'HTML' }
         );
-        if (delTime > 0) setTimeout(() => { bot.deleteMessage(targetGroupId, m.message_id).catch(() => {}); }, delTime);
+        if (delTime > 0) setTimeout(() => { bot.deleteMessage(targetGroupId, m.message_id).catch(() => { }); }, delTime);
 
         await sendSystemLog(`📜 <b>[ UNWARN LOG ]</b>\nเซกเตอร์: ${groupName}\nเป้าหมาย: ${targetName} (🆔 <code>${targetUserId}</code>) | ${oldWarn} → ${currentWarn}\n📅 เวลา: <code>${getThailandTimestamp()}</code>`, groupId);
         bot.sendMessage(chatId, `🧬 <b>Unwarn สำเร็จ!</b>`, { parse_mode: 'HTML', reply_markup: finishMenu });
@@ -1702,8 +1140,8 @@ bot.on('message', async (msg) => {
       const chkText = checkWarn === 0
         ? '✅ ปกติ ไม่มีสารพิษ'
         : checkWarn >= WARN_LIMIT
-        ? '🚨 ระดับวิกฤต (ภายใต้โปรโตคอลแบน)'
-        : '⚠️ มีประวัติสะสมรังสี';
+          ? '🚨 ระดับวิกฤต (ภายใต้โปรโตคอลแบน)'
+          : '⚠️ มีประวัติสะสมรังสี';
 
       bot.sendMessage(chatId,
         `🔬 <b>[ BIO-SCANNER REPORT ]</b>\n━━━━━━━━━━━━━━━━━━━━\n👤 <b>ชื่อ:</b> ${targetName}\n🆔 <b>ID:</b> <code>${targetUserId}</code>\n🛰️ <b>เซกเตอร์:</b> ${groupName}\n☢️ <b>ดัชนีรังสี:</b> [${chkBar}] ${checkWarn}/${WARN_LIMIT}\n📊 <b>สถานะ:</b> ${chkText}\n━━━━━━━━━━━━━━━━━━━━`,
@@ -1731,7 +1169,7 @@ bot.on('message', async (msg) => {
           `🔴 <b>[ PROTOCOL VAPORIZED - BAN ]</b>\n👤 <b>${targetName}</b> (🆔 <code>${targetUserId}</code>)\n🚨 ข้อหา: <code>${reason}</code>`,
           { parse_mode: 'HTML' }
         );
-        if (delTime > 0) setTimeout(() => { bot.deleteMessage(targetGroupId, m.message_id).catch(() => {}); }, delTime);
+        if (delTime > 0) setTimeout(() => { bot.deleteMessage(targetGroupId, m.message_id).catch(() => { }); }, delTime);
 
         await sendSystemLog(`📜 <b>[ BAN LOG ]</b>\nเซกเตอร์: ${groupName}\nเป้าหมาย: ${targetName} (🆔 <code>${targetUserId}</code>)\nข้อหา: ${reason}\n📅 เวลา: <code>${getThailandTimestamp()}</code>`, groupId);
         bot.sendMessage(chatId, `✅ <b>BAN สำเร็จ</b>`, { parse_mode: 'HTML', reply_markup: finishMenu });
@@ -1758,7 +1196,7 @@ bot.on('message', async (msg) => {
           `🟢 <b>[ REANIMATE COMPLETE - UNBAN ]</b>\n👤 <b>${targetName}</b> (🆔 <code>${targetUserId}</code>)\n🔓 คืนสิทธิ์เข้ากลุ่มแล้ว`,
           { parse_mode: 'HTML' }
         );
-        if (delTime > 0) setTimeout(() => { bot.deleteMessage(targetGroupId, m.message_id).catch(() => {}); }, delTime);
+        if (delTime > 0) setTimeout(() => { bot.deleteMessage(targetGroupId, m.message_id).catch(() => { }); }, delTime);
 
         await sendSystemLog(`📜 <b>[ UNBAN LOG ]</b>\nเซกเตอร์: ${groupName}\nเป้าหมาย: ${targetName} (🆔 <code>${targetUserId}</code>)\nหมายเหตุ: ${reason}\n📅 เวลา: <code>${getThailandTimestamp()}</code>`, groupId);
         bot.sendMessage(chatId, `✅ <b>UNBAN สำเร็จ</b>`, { parse_mode: 'HTML', reply_markup: finishMenu });
