@@ -1,6 +1,47 @@
 const TelegramBot = require('node-telegram-bot-api');
 const http = require('http');
 const mongoose = require('mongoose');
+const express = require('express');
+const { Server } = require('socket.io');
+const path = require('path');
+
+// ==========================================
+// 🌐 Web Dashboard Setup (Express + Socket.io)
+// ==========================================
+const app = express();
+const server = http.createServer(app);
+const io = new Server(server, {
+  cors: { origin: "*" }
+});
+
+app.use(express.static(path.join(__dirname, 'public')));
+
+const originalConsoleLog = console.log;
+console.log = function (...args) {
+  originalConsoleLog.apply(console, args);
+  io.emit('log', { type: 'log', message: args.join(' '), timestamp: new Date().toISOString() });
+};
+
+const originalConsoleError = console.error;
+console.error = function (...args) {
+  originalConsoleError.apply(console, args);
+  io.emit('log', { type: 'error', message: args.join(' '), timestamp: new Date().toISOString() });
+};
+
+const originalConsoleWarn = console.warn;
+console.warn = function (...args) {
+  originalConsoleWarn.apply(console, args);
+  io.emit('log', { type: 'warn', message: args.join(' '), timestamp: new Date().toISOString() });
+};
+
+io.on('connection', (socket) => {
+  originalConsoleLog('🚀 New web dashboard connected');
+});
+
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => {
+  originalConsoleLog(`🌟 Premium Web Dashboard is running on port ${PORT}`);
+});
 
 
 // ==========================================
