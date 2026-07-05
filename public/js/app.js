@@ -1,116 +1,125 @@
 document.addEventListener('DOMContentLoaded', () => {
     const socket = io();
-    const logContainer = document.getElementById('log-container');
-    const filterBtns = document.querySelectorAll('.filter-btn');
+    const storybanContainer = document.getElementById('storyban-container');
+    const banCountEl = document.getElementById('ban-count');
     
-    let currentFilter = 'all';
+    let totalBans = 0;
+    let hasReceivedBans = false;
 
-    // Format time for logs (HH:MM:SS)
-    const formatTime = (isoString) => {
-        const date = new Date(isoString);
-        return date.toLocaleTimeString('en-US', { hour12: false });
+    // Helper to get initials for avatar
+    const getInitials = (name) => {
+        if (!name) return '?';
+        const parts = name.split(' ').filter(p => p.length > 0);
+        if (parts.length === 1) return parts[0].substring(0, 2).toUpperCase();
+        return (parts[0][0] + parts[1][0]).toUpperCase();
     };
 
-    // Create a new log element
-    const createLogElement = (log) => {
-        const el = document.createElement('div');
-        el.className = `log-entry ${log.type} fade-in`;
-        el.dataset.type = log.type;
-
-        // Apply filter display rule
-        if (currentFilter !== 'all' && currentFilter !== log.type && !(currentFilter === 'info' && log.type === 'log')) {
-            el.style.display = 'none';
-        }
-
-        const timeSpan = document.createElement('span');
-        timeSpan.className = 'log-time';
-        timeSpan.textContent = formatTime(log.timestamp);
-
-        const badgeSpan = document.createElement('span');
-        badgeSpan.className = `log-badge ${log.type}`;
-        badgeSpan.textContent = log.type.toUpperCase();
-
-        const msgSpan = document.createElement('span');
-        msgSpan.className = 'log-msg';
-        msgSpan.textContent = log.message;
-
-        el.appendChild(timeSpan);
-        el.appendChild(badgeSpan);
-        el.appendChild(msgSpan);
-
-        return el;
-    };
-
-    // Auto-scroll to bottom function
-    const scrollToBottom = () => {
-        logContainer.scrollTop = logContainer.scrollHeight;
-    };
-
-    // Listen for incoming logs from server
-    socket.on('log', (log) => {
-        const logEl = createLogElement(log);
-        logContainer.appendChild(logEl);
+    // Create a new Storyban card
+    const createStorybanCard = (data) => {
+        const card = document.createElement('div');
+        card.className = 'ban-card slide-in';
         
-        // Remove oldest if there are too many logs (e.g., > 1000)
-        if (logContainer.children.length > 1000) {
-            logContainer.removeChild(logContainer.firstChild);
+        // Target (User) Column
+        const userCol = document.createElement('div');
+        userCol.className = 'user-info';
+        
+        const avatar = document.createElement('div');
+        avatar.className = 'user-avatar';
+        avatar.textContent = getInitials(data.user);
+        
+        const userDetails = document.createElement('div');
+        userDetails.className = 'user-details';
+        
+        const userName = document.createElement('span');
+        userName.className = 'user-name';
+        userName.innerHTML = data.user; // Use innerHTML in case there are some HTML tags, though it should be plain text
+        
+        const userId = document.createElement('span');
+        userId.className = 'user-id';
+        userId.textContent = `ID: ${data.userId}`;
+        
+        userDetails.appendChild(userName);
+        userDetails.appendChild(userId);
+        userCol.appendChild(avatar);
+        userCol.appendChild(userDetails);
+
+        // Sector Column
+        const sectorCol = document.createElement('div');
+        sectorCol.className = 'sector-info';
+        
+        const sectorBadge = document.createElement('span');
+        sectorBadge.className = 'sector-badge';
+        sectorBadge.textContent = data.sector || 'Unknown Sector';
+        
+        sectorCol.appendChild(sectorBadge);
+
+        // Time Column
+        const timeCol = document.createElement('div');
+        timeCol.className = 'time-info';
+        
+        // Parse time or use the provided TH timestamp
+        let displayTime = data.time;
+        if (!displayTime && data.timestamp) {
+            const date = new Date(data.timestamp);
+            displayTime = date.toLocaleTimeString('en-US', { hour12: false });
+        }
+        timeCol.textContent = displayTime;
+
+        card.appendChild(userCol);
+        card.appendChild(sectorCol);
+        card.appendChild(timeCol);
+
+        return card;
+    };
+
+    // Listen for incoming storyban events
+    socket.on('storyban', (data) => {
+        // Remove empty state if this is the first ban
+        if (!hasReceivedBans) {
+            const emptyState = storybanContainer.querySelector('.empty-state');
+            if (emptyState) {
+                emptyState.style.display = 'none';
+            }
+            hasReceivedBans = true;
         }
 
-        // Only auto-scroll if user is near the bottom
-        const isScrolledToBottom = logContainer.scrollHeight - logContainer.clientHeight <= logContainer.scrollTop + 50;
-        if (isScrolledToBottom) {
-            scrollToBottom();
+        const card = createStorybanCard(data);
+        
+        // Prepend to show newest at the top
+        storybanContainer.insertBefore(card, storybanContainer.firstChild);
+        
+        // Keep only the latest 100 bans to prevent memory leaks
+        if (storybanContainer.children.length > 100) {
+            storybanContainer.removeChild(storybanContainer.lastChild);
         }
-    });
 
-    // Handle filter buttons
-    filterBtns.forEach(btn => {
-        btn.addEventListener('click', () => {
-            // Update active state
-            filterBtns.forEach(b => b.classList.remove('active'));
-            btn.classList.add('active');
-            
-            currentFilter = btn.dataset.filter;
-            
-            // Apply filter to existing logs
-            const logs = logContainer.querySelectorAll('.log-entry');
-            logs.forEach(logEl => {
-                const type = logEl.dataset.type;
-                if (currentFilter === 'all') {
-                    logEl.style.display = 'grid';
-                } else if (currentFilter === type || (currentFilter === 'info' && type === 'log')) {
-                    logEl.style.display = 'grid';
-                } else {
-                    logEl.style.display = 'none';
-                }
-            });
-            scrollToBottom();
-        });
+        // Update count
+        totalBans++;
+        banCountEl.textContent = totalBans;
     });
 
     // Connection status events
     socket.on('connect', () => {
-        const pulse = document.querySelector('.pulse');
-        const statusText = document.querySelector('.status-text');
-        pulse.style.backgroundColor = '#10b981'; // Green
-        pulse.style.animation = 'pulse-animation 2s infinite';
-        statusText.textContent = 'System Online';
-        statusText.style.color = '#10b981';
+        const dot = document.querySelector('.status-dot');
+        const text = document.querySelector('.status-text');
+        
+        dot.style.backgroundColor = 'var(--success-green)';
+        dot.style.boxShadow = '0 0 10px var(--success-green)';
+        dot.style.animation = 'blink 2s infinite';
+        
+        text.textContent = 'Uplink Active';
+        text.style.color = 'var(--success-green)';
     });
 
     socket.on('disconnect', () => {
-        const pulse = document.querySelector('.pulse');
-        const statusText = document.querySelector('.status-text');
-        pulse.style.backgroundColor = '#ef4444'; // Red
-        pulse.style.animation = 'none';
-        statusText.textContent = 'Disconnected';
-        statusText.style.color = '#ef4444';
+        const dot = document.querySelector('.status-dot');
+        const text = document.querySelector('.status-text');
         
-        // Add a disconnect log
-        logContainer.appendChild(createLogElement({
-            type: 'error',
-            message: 'Lost connection to server.',
-            timestamp: new Date().toISOString()
-        }));
+        dot.style.backgroundColor = 'var(--accent-red)';
+        dot.style.boxShadow = '0 0 10px var(--accent-red)';
+        dot.style.animation = 'none';
+        
+        text.textContent = 'Connection Lost';
+        text.style.color = 'var(--accent-red)';
     });
 });

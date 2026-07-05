@@ -739,26 +739,32 @@ bot.on('message', async (msg) => {
           msg.chat.id
         );
       }
+
+      // ส่งข้อมูลไปยัง Web Dashboard
+      io.emit('storyban', {
+        user: fullName,
+        userId: msg.from.id,
+        sector: groupInfo?.name || msg.chat.title || msg.chat.id,
+        time: getThailandTimestamp(),
+        timestamp: new Date().toISOString()
+      });
+
       return;
     }
 
     // 2. NAME FILTER BAN
     if (currentSector.settings.nameFilterActive) {
       const senderName = fullName.toLowerCase();
-      const chatTitle = (msg.chat.title || '').toLowerCase().replace(/\s+/g, ' ').trim();
 
-      // ตรวจชื่อกลุ่มก่อน (ไม่ต้องมี impersonatorNames)
-      const matchesGroup = chatTitle && senderName.includes(chatTitle);
-
-      // ตรวจรายชื่อที่ admin เพิ่มไว้
+      // ตรวจรายชื่อที่ admin เพิ่มไว้เท่านั้น
       const matchesList = currentSector.impersonatorNames.length > 0 &&
         currentSector.impersonatorNames.some(bName => senderName.includes(bName.toLowerCase()));
 
-      if (matchesGroup || matchesList) {
+      if (matchesList) {
         tgQueue.add(() => bot.deleteMessage(msg.chat.id, msg.message_id)).catch(() => { });
         tgQueue.add(() => bot.banChatMember(msg.chat.id, msg.from.id)).catch(() => { });
         if (currentSector.settings.nameFilterLogActive) {
-          const reason = matchesGroup ? `ชื่อตรงกับกลุ่ม` : `ตรงรายชื่อเฝ้าระวัง`;
+          const reason = `ตรงรายชื่อเฝ้าระวัง`;
           await sendSystemLog(
             `🚫 <b>[NAME FILTER BAN]</b>\nเป้าหมาย: <code>${fullName}</code> (🆔 <code>${msg.from.id}</code>)\nเหตุผล: ${reason}\nเซกเตอร์: <code>${groupInfo?.name || msg.chat.title || msg.chat.id}</code>\n📅 เวลา (ไทย): <code>${getThailandTimestamp()}</code>`,
             msg.chat.id

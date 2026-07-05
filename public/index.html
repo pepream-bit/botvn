@@ -3,64 +3,88 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Bot Operations Dashboard</title>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
+    <title>Alien Command | Storyban Operations</title>
+    <!-- Modern premium fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
-    <div class="dashboard-container">
-        <!-- Sidebar for Stats/Info -->
-        <aside class="sidebar glass-panel">
-            <div class="logo-container">
-                <div class="logo-glow"></div>
-                <h1>Dark VN Bot</h1>
-                <p class="subtitle">Operations Center</p>
-            </div>
-            
-            <div class="status-container">
-                <div class="status-indicator">
-                    <span class="pulse"></span>
-                    <span class="status-text">System Online</span>
-                </div>
-            </div>
+    <div class="dashboard-wrapper">
+        <!-- Floating Animated Background Elements -->
+        <div class="bg-orb orb-1"></div>
+        <div class="bg-orb orb-2"></div>
+        <div class="bg-orb orb-3"></div>
 
-            <div class="nav-menu">
-                <div class="nav-item active">
-                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>
-                    Live Logs
-                </div>
-                <!-- Additional sections can be added here later -->
-            </div>
-        </aside>
-
-        <!-- Main Content Area -->
-        <main class="main-content">
-            <header class="top-bar glass-panel">
-                <h2>Real-time Logs</h2>
-                <div class="filter-controls">
-                    <button class="filter-btn active" data-filter="all">All</button>
-                    <button class="filter-btn" data-filter="info">Info</button>
-                    <button class="filter-btn" data-filter="warn">Warning</button>
-                    <button class="filter-btn" data-filter="error">Error</button>
-                </div>
-            </header>
-            
-            <div class="log-viewer-container glass-panel">
-                <div class="log-header">
-                    <span>Timestamp</span>
-                    <span>Type</span>
-                    <span>Message</span>
-                </div>
-                <div id="log-container" class="logs-list">
-                    <!-- Logs will be dynamically injected here -->
-                    <div class="log-entry info fade-in">
-                        <span class="log-time">Now</span>
-                        <span class="log-badge info">SYSTEM</span>
-                        <span class="log-msg">Waiting for incoming logs...</span>
+        <div class="dashboard-container glass-panel">
+            <!-- Sidebar -->
+            <aside class="sidebar">
+                <div class="logo-container">
+                    <div class="logo-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M12 2a10 10 0 0 1 10 10v9a1 1 0 0 1-1 1h-4a1 1 0 0 1-1-1v-3a1 1 0 0 0-1-1h-2a1 1 0 0 0-1 1v3a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1v-9A10 10 0 0 1 12 2z"></path>
+                        </svg>
+                        <div class="pulse-ring"></div>
+                    </div>
+                    <div class="logo-text">
+                        <h1>Alien Command</h1>
+                        <p>Security Division</p>
                     </div>
                 </div>
-            </div>
-        </main>
+                
+                <div class="nav-menu">
+                    <div class="nav-item active">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12h4l2-9 5 18 3-10h6"></path></svg>
+                        <span>Storyban Radar</span>
+                    </div>
+                </div>
+
+                <div class="system-status glass-card">
+                    <div class="status-header">
+                        <span class="status-dot"></span>
+                        <span class="status-text">Uplink Active</span>
+                    </div>
+                    <p class="status-desc">Monitoring sectors for unauthorized stories in real-time.</p>
+                </div>
+            </aside>
+
+            <!-- Main Content Area -->
+            <main class="main-content">
+                <header class="top-bar">
+                    <div class="page-title">
+                        <h2>Live Operations</h2>
+                        <p class="subtitle">Real-time Storyban Feed</p>
+                    </div>
+                    <div class="stats-overview">
+                        <div class="stat-pill glass-card">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
+                            <span>Total Banned:</span>
+                            <strong id="ban-count">0</strong>
+                        </div>
+                    </div>
+                </header>
+                
+                <div class="log-viewer-container">
+                    <!-- Column Headers -->
+                    <div class="log-grid-header">
+                        <div class="col-user">Target (User)</div>
+                        <div class="col-sector">Sector</div>
+                        <div class="col-time">Time (TH)</div>
+                    </div>
+
+                    <!-- Dynamic Logs Container -->
+                    <div id="storyban-container" class="logs-list">
+                        <!-- Empty State -->
+                        <div class="empty-state">
+                            <div class="empty-icon-wrap">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>
+                            </div>
+                            <p>No storybans detected yet.<br>Listening to sectors...</p>
+                        </div>
+                        <!-- Logs will be dynamically injected here -->
+                    </div>
+                </div>
+            </main>
+        </div>
     </div>
 
     <script src="/socket.io/socket.io.js"></script>
