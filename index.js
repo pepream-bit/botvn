@@ -1252,5 +1252,3 @@ bot.on('message', async (msg) => {
   }
 });
 
-// 🌐 Web Server ป้องกัน Render Sleep
-http.createServer((req, res) => res.end('ALIEN_STATION_ONLINE')).listen(process.env.PORT || 3000);
