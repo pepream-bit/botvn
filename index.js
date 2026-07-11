@@ -859,6 +859,7 @@ function sendGroupMenu(chatId, groupId) {
     [{ text: '📡 สื่อสาร (Comms)', callback_data: `menu_comms_${groupId}` }],
     [{ text: '📜 แจ้งเตือน Log (Log Config)', callback_data: `menu_log_${groupId}` }],
     [{ text: '⚙️ ตั้งค่า (Settings)', callback_data: `menu_set_${groupId}` }],
+    [{ text: '⏰ ส่งอัตโนมัติ (Auto-Send)', callback_data: `menu_auto_${groupId}` }],
     [{ text: '⬅️ กลับหน้าจอหลัก', callback_data: 'back_to_main' }]
   ];
   bot.sendMessage(chatId, `🛰️ <b>เซกเตอร์:</b> <code>${group.name}</code>\nเลือกระบบปฏิบัติการ:`, {
@@ -974,6 +975,37 @@ function sendSettingsMenu(chatId, groupId) {
   });
 }
 
+async function sendAutoMenu(chatId, groupId) {
+  const group = TARGET_GROUPS.find(g => g.id == groupId);
+  if (!group) return;
+  
+  try {
+    const items = await RecurringMessage.find({ targetGroupId: groupId.toString() }).sort({ createdAt: -1 });
+    const submenu = [];
+    
+    if (items.length > 0) {
+      items.forEach(item => {
+        const statusText = item.enabled ? '🟢' : '🔴';
+        submenu.push([
+          { text: `${statusText} ${item.name} (ทุก ${item.intervalHours} ชม.)`, callback_data: `toggle_auto_${item._id}` },
+          { text: `🗑 ลบ`, callback_data: `del_auto_${item._id}` }
+        ]);
+      });
+    }
+    
+    submenu.push([{ text: '➕ สร้างข้อความอัตโนมัติใหม่', callback_data: `opt_addauto_${groupId}` }]);
+    submenu.push([{ text: '⬅️ ย้อนกลับ', callback_data: `select_group_${groupId}` }]);
+    
+    let text = `⏰ <b>ระบบส่งข้อความอัตโนมัติ (Auto-Send)</b>\n🛰️ เซกเตอร์: <code>${group.name}</code>\n\n`;
+    if (items.length === 0) text += `<i>ไม่มีข้อความอัตโนมัติในกลุ่มนี้</i>`;
+    else text += `กดที่ 🟢/🔴 เพื่อเปิด/ปิดการทำงาน`;
+
+    bot.sendMessage(chatId, text, { parse_mode: 'HTML', reply_markup: { inline_keyboard: submenu } });
+  } catch (err) {
+    bot.sendMessage(chatId, `❌ เกิดข้อผิดพลาด: ${err.message}`);
+  }
+}
+
 bot.onText(/\/start/, (msg) => {
   if (!globalWhitelist.includes(msg.from.id)) return;
   monitorSessions.delete(msg.from.id);
@@ -1013,6 +1045,7 @@ bot.on('callback_query', async (query) => {
   if (data.startsWith('menu_namefilter_')) return sendNameFilterMenu(chatId, data.replace('menu_namefilter_', ''));
   if (data.startsWith('menu_comms_')) return sendCommsMenu(chatId, data.replace('menu_comms_', ''));
   if (data.startsWith('menu_set_')) return sendSettingsMenu(chatId, data.replace('menu_set_', ''));
+  if (data.startsWith('menu_auto_')) return sendAutoMenu(chatId, data.replace('menu_auto_', ''));
 
   // ── Toggle Switches ──
   if (data.startsWith('toggle_storyban_')) {
@@ -1066,6 +1099,51 @@ bot.on('callback_query', async (query) => {
     return sendLogMenu(chatId, groupId);
   }
 
+    // ── Toggle Auto-Send ──
+    if (data.startsWith('toggle_auto_')) {
+      const id = data.replace('toggle_auto_', '');
+      try {
+        const doc = await RecurringMessage.findById(id);
+        if (doc) {
+          const newEnabled = !doc.enabled;
+          const updated = await RecurringMessage.findByIdAndUpdate(
+            id,
+            { enabled: newEnabled, status: newEnabled ? 'running' : 'paused', updatedAt: new Date() },
+            { new: true }
+          );
+          if (newEnabled) {
+            await scheduleRecurringJob(updated);
+          } else if (scheduledJobs.has(id)) {
+            scheduledJobs.get(id).cancel();
+            scheduledJobs.delete(id);
+          }
+          io.emit('recurring:update', { id, enabled: newEnabled, status: newEnabled ? 'running' : 'paused' });
+          return sendAutoMenu(chatId, doc.targetGroupId);
+        }
+      } catch (err) {
+        return bot.sendMessage(chatId, `❌ เกิดข้อผิดพลาด: ${err.message}`);
+      }
+    }
+    
+    // ── Delete Auto-Send ──
+    if (data.startsWith('del_auto_')) {
+      const id = data.replace('del_auto_', '');
+      try {
+        const doc = await RecurringMessage.findById(id);
+        if (doc) {
+          if (scheduledJobs.has(id)) {
+            scheduledJobs.get(id).cancel();
+            scheduledJobs.delete(id);
+          }
+          await RecurringMessage.findByIdAndDelete(id);
+          // Optional: we can just refresh the menu without emitting if we want, but emit is good
+          return sendAutoMenu(chatId, doc.targetGroupId);
+        }
+      } catch (err) {
+        return bot.sendMessage(chatId, `❌ เกิดข้อผิดพลาด: ${err.message}`);
+      }
+    }
+
   // FIX #2: Fixed set_del_ parser — use lastIndexOf('_') to correctly extract time value
   // even when groupId is a negative number (e.g. -100123456) containing no extra underscores.
   if (data.startsWith('set_del_')) {
@@ -1101,6 +1179,7 @@ bot.on('callback_query', async (query) => {
     if (action.includes('logch')) backTarget = `menu_log_${groupId}`;
     if (action.includes('notify')) backTarget = 'menu_whitelist';
     if (action === 'capture' || action === 'ann' || action === 'replylink') backTarget = `menu_comms_${groupId}`;
+    if (action === 'addauto') backTarget = `menu_auto_${groupId}`;
 
     const cancelMenu = { inline_keyboard: [[{ text: '❌ ยกเลิกและกลับ', callback_data: backTarget }]] };
 
@@ -1124,6 +1203,7 @@ bot.on('callback_query', async (query) => {
     if (action === 'delsector') promptMsg = `➖ <b>[ลบเซกเตอร์]</b>\nพิมพ์ <b>ID ตัวเลข</b> ของเซกเตอร์ที่ต้องการลบ\n(เช่น: <code>-10012345678</code>):`;
     if (action === 'setlogch') promptMsg = `➕ <b>[ตั้งพิกัด Log Channel]</b>\nพิมพ์ <b>ID ตัวเลข</b> ของ Telegram Channel ที่ต้องการรับ Log ของกลุ่มนี้\n(ตัวอย่าง: <code>-100123456789</code>):`;
     if (action === 'dellogch') promptMsg = `➖ <b>[ลบพิกัด Log Channel]</b>\nพิมพ์คำว่า <code>ยืนยัน</code> เพื่อลบพิกัด Channel เฉพาะของเซกเตอร์นี้\n(บอทจะกลับไปใช้แชนแนลกลางจาก .env แทน):`;
+    if (action === 'addauto') promptMsg = `⏰ <b>[สร้างข้อความอัตโนมัติ 1/3]</b>\n\nกรุณาส่ง <b>ข้อความ</b> หรือ <b>รูปภาพพร้อมแคปชัน</b> ที่ต้องการตั้งเวลาส่งอัตโนมัติมาที่นี่:`;
 
     bot.sendMessage(chatId, promptMsg, { parse_mode: 'HTML', reply_markup: cancelMenu })
       .then(sentMsg => {
@@ -1514,6 +1594,82 @@ bot.on('message', async (msg) => {
         bot.sendMessage(chatId, `📡 <b>ยิงสัญญาณตอบกลับสำเร็จ!</b>`, { parse_mode: 'HTML', reply_markup: { inline_keyboard: inlineKey } });
       } catch (e) {
         bot.sendMessage(chatId, `❌ <b>ยิงสัญญาณล้มเหลว:</b> <code>${e.message}</code>`, { parse_mode: 'HTML', reply_markup: finishMenu });
+      }
+      break;
+    }
+
+    // ── Auto-Send Multi-Step ──
+    case 'addauto': {
+      let contentData = {};
+      if (msg.photo) {
+        contentData.imageUrls = [msg.photo[msg.photo.length - 1].file_id];
+        contentData.caption = msg.caption || '';
+      } else {
+        contentData.messageText = msg.text || msg.caption || '';
+      }
+
+      const promptMsg = await bot.sendMessage(chatId, `⏰ <b>[สร้างข้อความอัตโนมัติ 2/3]</b>\n\nต้องการให้ส่งข้อความนี้วนซ้ำทุกๆ กี่ <b>ชั่วโมง</b>?\n(โปรดพิมพ์เฉพาะตัวเลข เช่น <code>1</code>, <code>2</code> หรือ <code>24</code> สำหรับ 1 วัน):`, {
+        parse_mode: 'HTML',
+        reply_markup: { inline_keyboard: [[{ text: '❌ ยกเลิกและกลับ', callback_data: `menu_auto_${groupId}` }]] }
+      });
+      monitorSessions.set(msg.from.id, { chatId, groupId, action: 'addauto_step2', promptMsgId: promptMsg.message_id, contentData });
+      break;
+    }
+
+    case 'addauto_step2': {
+      const hours = parseFloat(inputStr);
+      if (isNaN(hours) || hours <= 0) {
+        const errorMsg = await bot.sendMessage(chatId, `❌ กรุณาพิมพ์เป็นตัวเลขที่มากกว่า 0 เท่านั้น:`, {
+          parse_mode: 'HTML',
+          reply_markup: { inline_keyboard: [[{ text: '❌ ยกเลิกและกลับ', callback_data: `menu_auto_${groupId}` }]] }
+        });
+        monitorSessions.set(msg.from.id, { chatId, groupId, action: 'addauto_step2', promptMsgId: errorMsg.message_id, contentData: session.contentData });
+        break;
+      }
+      
+      const contentData = session.contentData;
+      contentData.intervalHours = hours;
+
+      const promptMsg = await bot.sendMessage(chatId, `⏰ <b>[สร้างข้อความอัตโนมัติ 3/3]</b>\n\nโปรดตั้งชื่อของชุดข้อความนี้ เพื่อให้จำง่าย (เช่น <code>โปรโมชันเช้า</code>):`, {
+        parse_mode: 'HTML',
+        reply_markup: { inline_keyboard: [[{ text: '❌ ยกเลิกและกลับ', callback_data: `menu_auto_${groupId}` }]] }
+      });
+      monitorSessions.set(msg.from.id, { chatId, groupId, action: 'addauto_step3', promptMsgId: promptMsg.message_id, contentData });
+      break;
+    }
+
+    case 'addauto_step3': {
+      const name = inputStr || 'ข้อความอัตโนมัติ';
+      const contentData = session.contentData;
+      
+      try {
+        const doc = await RecurringMessage.create({
+          name: name,
+          targetGroupId: groupId.toString(),
+          targetGroupName: groupName,
+          messageText: contentData.messageText || '',
+          imageUrls: contentData.imageUrls || [],
+          caption: contentData.caption || '',
+          buttons: [],
+          intervalHours: contentData.intervalHours,
+          intervalDays: 0,
+          intervalWeeks: 0,
+          startAt: new Date(),
+          endAt: null,
+          enabled: true,
+          status: 'paused'
+        });
+        
+        await scheduleRecurringJob(doc);
+        const updatedDoc = await RecurringMessage.findById(doc._id);
+        io.emit('recurring:update', { id: updatedDoc._id.toString(), enabled: true, status: 'running', nextRunAt: updatedDoc.nextRunAt });
+        
+        bot.sendMessage(chatId, `✅ <b>สร้างข้อความอัตโนมัติสำเร็จ!</b>\n\nชื่อ: <code>${name}</code>\nส่งทุกๆ: <code>${contentData.intervalHours} ชั่วโมง</code>`, {
+          parse_mode: 'HTML',
+          reply_markup: { inline_keyboard: [[{ text: '⬅️ กลับไปจัดการข้อความอัตโนมัติ', callback_data: `menu_auto_${groupId}` }]] }
+        });
+      } catch (err) {
+        bot.sendMessage(chatId, `❌ <b>เกิดข้อผิดพลาด:</b> ${err.message}`, { parse_mode: 'HTML', reply_markup: finishMenu });
       }
       break;
     }
