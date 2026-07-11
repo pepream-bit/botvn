@@ -4,6 +4,7 @@ const mongoose = require('mongoose');
 const express = require('express');
 const { Server } = require('socket.io');
 const path = require('path');
+const schedule = require('node-schedule');
 
 // ==========================================
 // 🌐 Web Dashboard Setup (Express + Socket.io)
@@ -15,6 +16,7 @@ const io = new Server(server, {
 });
 
 app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.json());
 
 const originalConsoleLog = console.log;
 console.log = function (...args) {
@@ -142,6 +144,36 @@ const SectorConfigSchema = new mongoose.Schema({
 }, { minimize: false });
 const SectorConfig = mongoose.model('SectorConfig', SectorConfigSchema);
 
+// 3. ⏰ Recurring Messages Schema
+const ButtonSchema = new mongoose.Schema({
+  text: { type: String, required: true },
+  url: { type: String, default: null },
+  callback_data: { type: String, default: null }
+}, { _id: false });
+
+const RecurringMessageSchema = new mongoose.Schema({
+  name: { type: String, required: true },
+  targetGroupId: { type: String, required: true },
+  targetGroupName: { type: String, default: '' },
+  messageText: { type: String, default: '' },
+  imageUrls: { type: [String], default: [] },
+  caption: { type: String, default: '' },
+  buttons: { type: [ButtonSchema], default: [] },
+  intervalHours: { type: Number, default: 0 },
+  intervalDays: { type: Number, default: 0 },
+  intervalWeeks: { type: Number, default: 0 },
+  startAt: { type: Date, default: Date.now },
+  endAt: { type: Date, default: null },
+  enabled: { type: Boolean, default: true },
+  lastSentAt: { type: Date, default: null },
+  nextRunAt: { type: Date, default: null },
+  status: { type: String, enum: ['running', 'paused', 'error', 'completed'], default: 'paused' },
+  errorMessage: { type: String, default: null },
+  createdAt: { type: Date, default: Date.now },
+  updatedAt: { type: Date, default: Date.now }
+});
+const RecurringMessage = mongoose.model('RecurringMessage', RecurringMessageSchema);
+
 // ==========================================
 // 🌌 หน่วยความจำชั่วคราว (Cache & Session)
 // ==========================================
@@ -152,6 +184,9 @@ let notifyUserIds = [];
 const usernameCache = {};   // { "username_lower": { id, name } }
 const sectorCache = {};     // { groupId: SectorConfig doc }
 const monitorSessions = new Map();
+
+// Map of active node-schedule jobs: { recurringId: job }
+const scheduledJobs = new Map();
 
 const WARN_LIMIT = 2;
 
@@ -209,6 +244,9 @@ async function loadDatabase() {
     console.log('📂 โหลดข้อมูลเข้าสู่หน่วยความจำเสร็จสิ้น');
     console.log('🗂️ sectorCache keys:', Object.keys(sectorCache));
     console.log('🛰️ TARGET_GROUPS ids:', TARGET_GROUPS.map(g => `${g.id} (${typeof g.id})`));
+
+    // โหลดและเปิดใช้งาน Recurring Jobs ที่เปิดอยู่
+    await loadRecurringJobs();
   } catch (e) {
     console.error('❌ โหลดข้อมูล DB ล้มเหลว:', e.message);
   }
@@ -264,7 +302,9 @@ function getWarnCount(groupId, userId) {
   return sectorCache[groupId]?.warnRecords?.[userId] || 0;
 }
 
+// FIX #1: Added null guard — prevents crash if groupId not in sectorCache
 function addWarn(groupId, userId) {
+  if (!sectorCache[groupId]) return 0;
   if (!sectorCache[groupId].warnRecords) sectorCache[groupId].warnRecords = {};
   sectorCache[groupId].warnRecords[userId] = (sectorCache[groupId].warnRecords[userId] || 0) + 1;
   return sectorCache[groupId].warnRecords[userId];
@@ -276,7 +316,9 @@ function removeWarn(groupId, userId) {
   return sectorCache[groupId].warnRecords[userId];
 }
 
+// FIX #1: Added null guard — prevents crash if groupId not in sectorCache
 function clearWarn(groupId, userId) {
+  if (!sectorCache[groupId]) return;
   if (!sectorCache[groupId].warnRecords) sectorCache[groupId].warnRecords = {};
   sectorCache[groupId].warnRecords[userId] = 0;
 }
@@ -326,6 +368,203 @@ function buildMessageLink(chatId, messageId) {
 }
 
 // ==========================================
+// ⏰ Recurring Messages Scheduler Engine
+// ==========================================
+
+/**
+ * Calculate interval in milliseconds from a recurring message doc.
+ */
+function calcIntervalMs(doc) {
+  const h = (doc.intervalHours || 0) * 60 * 60 * 1000;
+  const d = (doc.intervalDays || 0) * 24 * 60 * 60 * 1000;
+  const w = (doc.intervalWeeks || 0) * 7 * 24 * 60 * 60 * 1000;
+  return h + d + w;
+}
+
+/**
+ * Send a recurring message to the target group.
+ */
+async function fireRecurringMessage(doc) {
+  const targetId = parseInt(doc.targetGroupId);
+  if (isNaN(targetId)) throw new Error(`Invalid targetGroupId: ${doc.targetGroupId}`);
+
+  const replyMarkup = doc.buttons && doc.buttons.length > 0
+    ? {
+        inline_keyboard: doc.buttons.map(btn => {
+          const button = { text: btn.text };
+          if (btn.url) button.url = btn.url;
+          else if (btn.callback_data) button.callback_data = btn.callback_data;
+          return [button];
+        })
+      }
+    : undefined;
+
+  if (doc.imageUrls && doc.imageUrls.length > 0) {
+    if (doc.imageUrls.length === 1) {
+      // Single image with optional caption + buttons
+      await tgQueue.add(() => bot.sendPhoto(targetId, doc.imageUrls[0], {
+        caption: doc.caption || doc.messageText || undefined,
+        parse_mode: 'HTML',
+        reply_markup: replyMarkup
+      }));
+    } else {
+      // Media group (no caption per image, send text separately)
+      const media = doc.imageUrls.map((url, i) => ({
+        type: 'photo',
+        media: url,
+        caption: i === 0 ? (doc.caption || '') : undefined,
+        parse_mode: 'HTML'
+      }));
+      await tgQueue.add(() => bot.sendMediaGroup(targetId, media));
+      // If there are buttons or additional text, send as follow-up
+      if (doc.messageText && doc.buttons && doc.buttons.length > 0) {
+        await tgQueue.add(() => bot.sendMessage(targetId, doc.messageText, {
+          parse_mode: 'HTML',
+          reply_markup: replyMarkup
+        }));
+      }
+    }
+  } else if (doc.messageText) {
+    await tgQueue.add(() => bot.sendMessage(targetId, doc.messageText, {
+      parse_mode: 'HTML',
+      reply_markup: replyMarkup
+    }));
+  }
+}
+
+/**
+ * Schedule (or re-schedule) a single recurring message job.
+ * Cancels any existing job for the same ID first to prevent duplicates.
+ */
+async function scheduleRecurringJob(doc) {
+  const id = doc._id.toString();
+
+  // Cancel existing job to prevent duplicates
+  if (scheduledJobs.has(id)) {
+    scheduledJobs.get(id).cancel();
+    scheduledJobs.delete(id);
+  }
+
+  if (!doc.enabled) return;
+
+  const intervalMs = calcIntervalMs(doc);
+  if (intervalMs <= 0) {
+    console.warn(`⚠️ [Recurring] "${doc.name}" has zero interval — skipping schedule`);
+    return;
+  }
+
+  const now = Date.now();
+  const startAt = doc.startAt ? new Date(doc.startAt).getTime() : now;
+
+  // Calculate next run time
+  let nextRun;
+  if (doc.nextRunAt && new Date(doc.nextRunAt).getTime() > now) {
+    nextRun = new Date(doc.nextRunAt);
+  } else if (startAt > now) {
+    nextRun = new Date(startAt);
+  } else {
+    // Calculate the next occurrence aligned to startAt
+    const elapsed = now - startAt;
+    const periods = Math.floor(elapsed / intervalMs) + 1;
+    nextRun = new Date(startAt + periods * intervalMs);
+  }
+
+  // Check if past end date
+  if (doc.endAt && nextRun.getTime() > new Date(doc.endAt).getTime()) {
+    await RecurringMessage.findByIdAndUpdate(id, { status: 'completed', enabled: false });
+    io.emit('recurring:update', { id, status: 'completed', enabled: false });
+    return;
+  }
+
+  const job = schedule.scheduleJob(nextRun, async () => {
+    try {
+      // Re-fetch to ensure still enabled and not expired
+      const fresh = await RecurringMessage.findById(id);
+      if (!fresh || !fresh.enabled) return;
+
+      if (fresh.endAt && Date.now() > new Date(fresh.endAt).getTime()) {
+        await RecurringMessage.findByIdAndUpdate(id, { status: 'completed', enabled: false, updatedAt: new Date() });
+        scheduledJobs.delete(id);
+        io.emit('recurring:update', { id, status: 'completed', enabled: false });
+        return;
+      }
+
+      await fireRecurringMessage(fresh);
+
+      const newNextRun = new Date(Date.now() + intervalMs);
+
+      // Check if newNextRun exceeds endAt
+      let newStatus = 'running';
+      let newEnabled = true;
+      if (fresh.endAt && newNextRun.getTime() > new Date(fresh.endAt).getTime()) {
+        newStatus = 'completed';
+        newEnabled = false;
+      }
+
+      await RecurringMessage.findByIdAndUpdate(id, {
+        lastSentAt: new Date(),
+        nextRunAt: newStatus === 'completed' ? null : newNextRun,
+        status: newStatus,
+        enabled: newEnabled,
+        errorMessage: null,
+        updatedAt: new Date()
+      });
+
+      io.emit('recurring:update', {
+        id,
+        lastSentAt: new Date().toISOString(),
+        nextRunAt: newStatus === 'completed' ? null : newNextRun.toISOString(),
+        status: newStatus,
+        enabled: newEnabled
+      });
+
+      console.log(`📨 [Recurring] "${fresh.name}" sent → next: ${newStatus === 'completed' ? 'done' : newNextRun.toLocaleString('th-TH', { timeZone: 'Asia/Bangkok' })}`);
+
+      // Schedule next occurrence if still active
+      if (newStatus === 'running') {
+        const updatedDoc = await RecurringMessage.findById(id);
+        if (updatedDoc) await scheduleRecurringJob(updatedDoc);
+      }
+    } catch (err) {
+      console.error(`❌ [Recurring] "${doc.name}" fire error:`, err.message);
+      await RecurringMessage.findByIdAndUpdate(id, {
+        status: 'error',
+        errorMessage: err.message,
+        updatedAt: new Date()
+      });
+      io.emit('recurring:update', { id, status: 'error', errorMessage: err.message });
+    }
+  });
+
+  scheduledJobs.set(id, job);
+
+  // Update nextRunAt in DB
+  await RecurringMessage.findByIdAndUpdate(id, {
+    nextRunAt: nextRun,
+    status: 'running',
+    updatedAt: new Date()
+  });
+
+  console.log(`⏰ [Recurring] "${doc.name}" scheduled → ${nextRun.toLocaleString('th-TH', { timeZone: 'Asia/Bangkok' })}`);
+}
+
+/**
+ * Load all enabled recurring jobs from DB and schedule them.
+ * Called on startup to survive server restarts.
+ */
+async function loadRecurringJobs() {
+  try {
+    const jobs = await RecurringMessage.find({ enabled: true });
+    for (const job of jobs) {
+      await scheduleRecurringJob(job);
+    }
+    console.log(`⏰ โหลด Recurring Jobs สำเร็จ: ${jobs.length} งาน`);
+  } catch (e) {
+    console.error('❌ โหลด Recurring Jobs ล้มเหลว:', e.message);
+  }
+}
+
+// ==========================================
 // 🤖 สร้าง Bot Instance
 // ==========================================
 mongoose.connect(mongoUri)
@@ -360,6 +599,189 @@ async function sendSystemLog(message, groupIdOrChannelId = null) {
     bot.sendMessage(groupIdOrChannelId, message, { parse_mode: 'HTML' }).catch(() => { });
   }
 }
+
+// ==========================================
+// 🌐 REST API Endpoints
+// ==========================================
+
+// GET /api/sectors — list all target groups
+app.get('/api/sectors', (req, res) => {
+  res.json({ sectors: TARGET_GROUPS });
+});
+
+// GET /api/stats — dashboard stats
+app.get('/api/stats', async (req, res) => {
+  try {
+    const recurringCount = await RecurringMessage.countDocuments();
+    const recurringActive = await RecurringMessage.countDocuments({ enabled: true, status: 'running' });
+    res.json({ recurringCount, recurringActive });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/recurring — list all recurring messages
+app.get('/api/recurring', async (req, res) => {
+  try {
+    const items = await RecurringMessage.find().sort({ createdAt: -1 });
+    res.json({ items });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/recurring — create a new recurring message
+app.post('/api/recurring', async (req, res) => {
+  try {
+    const {
+      name, targetGroupId, targetGroupName, messageText, imageUrls, caption,
+      buttons, intervalHours, intervalDays, intervalWeeks, startAt, endAt, enabled
+    } = req.body;
+
+    if (!name || !targetGroupId) {
+      return res.status(400).json({ error: 'name and targetGroupId are required' });
+    }
+
+    const totalInterval = (Number(intervalHours) || 0) + (Number(intervalDays) || 0) * 24 + (Number(intervalWeeks) || 0) * 24 * 7;
+    if (totalInterval <= 0) {
+      return res.status(400).json({ error: 'At least one interval (hours, days, or weeks) must be greater than 0' });
+    }
+
+    const doc = await RecurringMessage.create({
+      name,
+      targetGroupId: targetGroupId.toString(),
+      targetGroupName: targetGroupName || '',
+      messageText: messageText || '',
+      imageUrls: imageUrls || [],
+      caption: caption || '',
+      buttons: buttons || [],
+      intervalHours: Number(intervalHours) || 0,
+      intervalDays: Number(intervalDays) || 0,
+      intervalWeeks: Number(intervalWeeks) || 0,
+      startAt: startAt ? new Date(startAt) : new Date(),
+      endAt: endAt ? new Date(endAt) : null,
+      enabled: enabled !== false,
+      status: 'paused'
+    });
+
+    if (doc.enabled) {
+      await scheduleRecurringJob(doc);
+      const updated = await RecurringMessage.findById(doc._id);
+      return res.status(201).json({ item: updated });
+    }
+
+    res.status(201).json({ item: doc });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// PUT /api/recurring/:id — edit a recurring message
+app.put('/api/recurring/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const {
+      name, targetGroupId, targetGroupName, messageText, imageUrls, caption,
+      buttons, intervalHours, intervalDays, intervalWeeks, startAt, endAt, enabled
+    } = req.body;
+
+    const existing = await RecurringMessage.findById(id);
+    if (!existing) return res.status(404).json({ error: 'Not found' });
+
+    // Cancel existing job before re-scheduling
+    if (scheduledJobs.has(id)) {
+      scheduledJobs.get(id).cancel();
+      scheduledJobs.delete(id);
+    }
+
+    const updatedDoc = await RecurringMessage.findByIdAndUpdate(
+      id,
+      {
+        name: name || existing.name,
+        targetGroupId: targetGroupId ? targetGroupId.toString() : existing.targetGroupId,
+        targetGroupName: targetGroupName !== undefined ? targetGroupName : existing.targetGroupName,
+        messageText: messageText !== undefined ? messageText : existing.messageText,
+        imageUrls: imageUrls !== undefined ? imageUrls : existing.imageUrls,
+        caption: caption !== undefined ? caption : existing.caption,
+        buttons: buttons !== undefined ? buttons : existing.buttons,
+        intervalHours: intervalHours !== undefined ? Number(intervalHours) : existing.intervalHours,
+        intervalDays: intervalDays !== undefined ? Number(intervalDays) : existing.intervalDays,
+        intervalWeeks: intervalWeeks !== undefined ? Number(intervalWeeks) : existing.intervalWeeks,
+        startAt: startAt ? new Date(startAt) : existing.startAt,
+        endAt: endAt !== undefined ? (endAt ? new Date(endAt) : null) : existing.endAt,
+        enabled: enabled !== undefined ? enabled : existing.enabled,
+        nextRunAt: null,  // reset next run so it recalculates
+        status: 'paused',
+        updatedAt: new Date()
+      },
+      { new: true }
+    );
+
+    if (updatedDoc.enabled) {
+      await scheduleRecurringJob(updatedDoc);
+      const refreshed = await RecurringMessage.findById(id);
+      return res.json({ item: refreshed });
+    }
+
+    res.json({ item: updatedDoc });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// DELETE /api/recurring/:id — delete a recurring message
+app.delete('/api/recurring/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (scheduledJobs.has(id)) {
+      scheduledJobs.get(id).cancel();
+      scheduledJobs.delete(id);
+    }
+    await RecurringMessage.findByIdAndDelete(id);
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// PATCH /api/recurring/:id/toggle — enable/disable
+app.patch('/api/recurring/:id/toggle', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const doc = await RecurringMessage.findById(id);
+    if (!doc) return res.status(404).json({ error: 'Not found' });
+
+    const newEnabled = !doc.enabled;
+
+    if (!newEnabled) {
+      // Cancel the job and mark paused
+      if (scheduledJobs.has(id)) {
+        scheduledJobs.get(id).cancel();
+        scheduledJobs.delete(id);
+      }
+      const updated = await RecurringMessage.findByIdAndUpdate(
+        id,
+        { enabled: false, status: 'paused', updatedAt: new Date() },
+        { new: true }
+      );
+      io.emit('recurring:update', { id, enabled: false, status: 'paused' });
+      return res.json({ item: updated });
+    } else {
+      // Enable and schedule
+      const updated = await RecurringMessage.findByIdAndUpdate(
+        id,
+        { enabled: true, status: 'paused', errorMessage: null, updatedAt: new Date() },
+        { new: true }
+      );
+      await scheduleRecurringJob(updated);
+      const refreshed = await RecurringMessage.findById(id);
+      io.emit('recurring:update', { id, enabled: true, status: refreshed.status, nextRunAt: refreshed.nextRunAt });
+      return res.json({ item: refreshed });
+    }
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
 
 // ==========================================
 // 📺 ระบบ UI เมนูหน้าจอ
@@ -443,8 +865,6 @@ function sendGroupMenu(chatId, groupId) {
     parse_mode: 'HTML', reply_markup: { inline_keyboard: submenu }
   });
 }
-
-
 
 function sendLogMenu(chatId, groupId) {
   const group = TARGET_GROUPS.find(g => g.id == groupId);
@@ -646,13 +1066,17 @@ bot.on('callback_query', async (query) => {
     return sendLogMenu(chatId, groupId);
   }
 
-  // ── ตั้งเวลาลบ ──
+  // FIX #2: Fixed set_del_ parser — use lastIndexOf('_') to correctly extract time value
+  // even when groupId is a negative number (e.g. -100123456) containing no extra underscores.
   if (data.startsWith('set_del_')) {
-    const parts = data.split('_');
-    const groupId = parts[2];
-    const timeVal = parseInt(parts[3]);
-    sectorCache[groupId].settings.botMessageDeleteTime = timeVal;
-    await saveSectorData(groupId);
+    const withoutPrefix = data.replace('set_del_', '');          // e.g. "-100123456_10000"
+    const lastUnderscore = withoutPrefix.lastIndexOf('_');
+    const groupId = withoutPrefix.substring(0, lastUnderscore);  // e.g. "-100123456"
+    const timeVal = parseInt(withoutPrefix.substring(lastUnderscore + 1)); // e.g. 10000
+    if (sectorCache[groupId]) {
+      sectorCache[groupId].settings.botMessageDeleteTime = timeVal;
+      await saveSectorData(groupId);
+    }
     return sendSettingsMenu(chatId, groupId);
   }
 
@@ -1257,4 +1681,3 @@ bot.on('message', async (msg) => {
       bot.sendMessage(chatId, `✅ รับคำสั่ง ${action} สำเร็จ`, { reply_markup: finishMenu });
   }
 });
-

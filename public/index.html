@@ -3,7 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Alien Command | Storyban Operations</title>
+    <meta name="description" content="Alien Command — Real-time Telegram group security dashboard with storyban radar and recurring message scheduling.">
+    <title>Alien Command | Security Division</title>
     <!-- Modern premium fonts -->
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="css/style.css">
@@ -31,17 +32,25 @@
                     </div>
                 </div>
                 
-                <div class="nav-menu">
-                    <div class="nav-item active">
+                <nav class="nav-menu" role="navigation" aria-label="Main navigation">
+                    <button class="nav-item active" id="nav-storyban" data-page="storyban" aria-current="page">
                         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12h4l2-9 5 18 3-10h6"></path></svg>
                         <span>Storyban Radar</span>
-                    </div>
-                </div>
+                    </button>
+                    <button class="nav-item" id="nav-recurring" data-page="recurring">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+                        <span>Recurring Messages</span>
+                    </button>
+                    <button class="nav-item" id="nav-console" data-page="console">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg>
+                        <span>System Console</span>
+                    </button>
+                </nav>
 
                 <div class="system-status glass-card">
                     <div class="status-header">
-                        <span class="status-dot"></span>
-                        <span class="status-text">Uplink Active</span>
+                        <span class="status-dot" id="status-dot"></span>
+                        <span class="status-text" id="status-text">Connecting...</span>
                     </div>
                     <p class="status-desc">Monitoring sectors for unauthorized stories in real-time.</p>
                 </div>
@@ -49,41 +58,259 @@
 
             <!-- Main Content Area -->
             <main class="main-content">
-                <header class="top-bar">
-                    <div class="page-title">
-                        <h2>Live Operations</h2>
-                        <p class="subtitle">Real-time Storyban Feed</p>
-                    </div>
-                    <div class="stats-overview">
-                        <div class="stat-pill glass-card">
-                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
-                            <span>Total Banned:</span>
-                            <strong id="ban-count">0</strong>
+
+                <!-- ═══════════════════════════════════════ -->
+                <!-- PAGE: Storyban Radar                    -->
+                <!-- ═══════════════════════════════════════ -->
+                <section id="page-storyban" class="page active">
+                    <header class="top-bar">
+                        <div class="page-title">
+                            <h2>Live Operations</h2>
+                            <p class="subtitle">Real-time Storyban Feed</p>
+                        </div>
+                        <div class="stats-overview">
+                            <div class="stat-pill glass-card">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
+                                <span>Total Banned:</span>
+                                <strong id="ban-count">0</strong>
+                            </div>
+                        </div>
+                    </header>
+                    
+                    <div class="log-viewer-container">
+                        <!-- Column Headers -->
+                        <div class="log-grid-header">
+                            <div class="col-user">Target (User)</div>
+                            <div class="col-sector">Sector</div>
+                            <div class="col-time">Time (TH)</div>
+                        </div>
+
+                        <!-- Dynamic Logs Container -->
+                        <div id="storyban-container" class="logs-list" role="log" aria-live="polite" aria-label="Storyban events">
+                            <!-- Empty State -->
+                            <div class="empty-state" id="storyban-empty">
+                                <div class="empty-icon-wrap">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>
+                                </div>
+                                <p>No storybans detected yet.<br>Listening to sectors...</p>
+                            </div>
+                            <!-- Logs will be dynamically injected here -->
                         </div>
                     </div>
-                </header>
-                
-                <div class="log-viewer-container">
-                    <!-- Column Headers -->
-                    <div class="log-grid-header">
-                        <div class="col-user">Target (User)</div>
-                        <div class="col-sector">Sector</div>
-                        <div class="col-time">Time (TH)</div>
+                </section>
+
+                <!-- ═══════════════════════════════════════ -->
+                <!-- PAGE: Recurring Messages                -->
+                <!-- ═══════════════════════════════════════ -->
+                <section id="page-recurring" class="page">
+                    <header class="top-bar">
+                        <div class="page-title">
+                            <h2>Recurring Messages</h2>
+                            <p class="subtitle">Scheduled Auto-Send Campaigns</p>
+                        </div>
+                        <div class="stats-overview">
+                            <button class="btn-primary" id="btn-create-recurring">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+                                Create Schedule
+                            </button>
+                        </div>
+                    </header>
+
+                    <div class="recurring-container">
+                        <!-- Loading State -->
+                        <div class="empty-state" id="recurring-loading">
+                            <div class="spinner"></div>
+                            <p>Loading schedules...</p>
+                        </div>
+                        <!-- Empty State -->
+                        <div class="empty-state hidden" id="recurring-empty">
+                            <div class="empty-icon-wrap">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+                            </div>
+                            <p>No recurring schedules yet.<br>Click <strong>Create Schedule</strong> to get started.</p>
+                        </div>
+                        <!-- Table -->
+                        <div class="recurring-table-wrap hidden" id="recurring-table-wrap">
+                            <table class="recurring-table" id="recurring-table">
+                                <thead>
+                                    <tr>
+                                        <th>Name</th>
+                                        <th>Target</th>
+                                        <th>Interval</th>
+                                        <th>Status</th>
+                                        <th>Next Run</th>
+                                        <th>Last Sent</th>
+                                        <th>Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="recurring-tbody">
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- ═══════════════════════════════════════ -->
+                <!-- PAGE: System Console                    -->
+                <!-- ═══════════════════════════════════════ -->
+                <section id="page-console" class="page">
+                    <header class="top-bar">
+                        <div class="page-title">
+                            <h2>System Console</h2>
+                            <p class="subtitle">Live Server Logs</p>
+                        </div>
+                        <div class="stats-overview">
+                            <button class="btn-ghost" id="btn-clear-console">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path><path d="M10 11v6"></path><path d="M14 11v6"></path><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"></path></svg>
+                                Clear
+                            </button>
+                        </div>
+                    </header>
+
+                    <div class="console-container">
+                        <div id="console-log" class="console-log" role="log" aria-live="polite" aria-label="System console output">
+                            <div class="console-line console-info">
+                                <span class="console-ts">--:--:--</span>
+                                <span class="console-msg">⬆ Waiting for server connection...</span>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+            </main>
+        </div>
+    </div>
+
+    <!-- ════════════════════════════════════════════════════════ -->
+    <!-- MODAL: Create / Edit Recurring Message                  -->
+    <!-- ════════════════════════════════════════════════════════ -->
+    <div class="modal-overlay hidden" id="recurring-modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+        <div class="modal glass-panel">
+            <div class="modal-header">
+                <h3 id="modal-title">Create Schedule</h3>
+                <button class="modal-close" id="modal-close" aria-label="Close modal">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                </button>
+            </div>
+            <div class="modal-body">
+                <form id="recurring-form" novalidate>
+                    <input type="hidden" id="form-id">
+
+                    <div class="form-grid">
+                        <!-- Name -->
+                        <div class="form-group full-width">
+                            <label for="form-name">Schedule Name <span class="required">*</span></label>
+                            <input type="text" id="form-name" placeholder="e.g. Daily Promo Message" required>
+                        </div>
+
+                        <!-- Target Group -->
+                        <div class="form-group full-width">
+                            <label for="form-target">Target Group / Sector <span class="required">*</span></label>
+                            <select id="form-target" required>
+                                <option value="">— Select a sector —</option>
+                            </select>
+                        </div>
+
+                        <!-- Interval -->
+                        <div class="form-group">
+                            <label>Send Every <span class="required">*</span></label>
+                            <div class="interval-row">
+                                <div class="interval-field">
+                                    <input type="number" id="form-hours" min="0" placeholder="0">
+                                    <span>hrs</span>
+                                </div>
+                                <div class="interval-field">
+                                    <input type="number" id="form-days" min="0" placeholder="0">
+                                    <span>days</span>
+                                </div>
+                                <div class="interval-field">
+                                    <input type="number" id="form-weeks" min="0" placeholder="0">
+                                    <span>wks</span>
+                                </div>
+                            </div>
+                            <p class="form-hint">Minimum total interval: 1 hour.</p>
+                        </div>
+
+                        <!-- Dates -->
+                        <div class="form-group">
+                            <label for="form-start">Start Date &amp; Time</label>
+                            <input type="datetime-local" id="form-start">
+                        </div>
+                        <div class="form-group">
+                            <label for="form-end">End Date &amp; Time <span class="optional">(optional)</span></label>
+                            <input type="datetime-local" id="form-end">
+                        </div>
+
+                        <!-- Message Text -->
+                        <div class="form-group full-width">
+                            <label for="form-message">Message Text <span class="optional">(HTML supported)</span></label>
+                            <textarea id="form-message" rows="4" placeholder="Enter message text. Supports Telegram HTML: &lt;b&gt;bold&lt;/b&gt;, &lt;i&gt;italic&lt;/i&gt;, &lt;code&gt;code&lt;/code&gt;"></textarea>
+                        </div>
+
+                        <!-- Images -->
+                        <div class="form-group full-width">
+                            <label for="form-images">Image URLs <span class="optional">(one per line, or Telegram file_id)</span></label>
+                            <textarea id="form-images" rows="3" placeholder="https://example.com/image.jpg&#10;https://example.com/image2.jpg"></textarea>
+                        </div>
+
+                        <!-- Caption -->
+                        <div class="form-group full-width">
+                            <label for="form-caption">Image Caption <span class="optional">(shown under first image)</span></label>
+                            <input type="text" id="form-caption" placeholder="Caption for image(s)">
+                        </div>
+
+                        <!-- Buttons -->
+                        <div class="form-group full-width">
+                            <label>Inline Buttons <span class="optional">(optional)</span></label>
+                            <div id="buttons-list"></div>
+                            <button type="button" class="btn-ghost btn-add-btn" id="btn-add-button">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+                                Add Button
+                            </button>
+                        </div>
+
+                        <!-- Enabled toggle -->
+                        <div class="form-group full-width">
+                            <label class="toggle-label">
+                                <span>Enable immediately after saving</span>
+                                <div class="toggle-wrap">
+                                    <input type="checkbox" id="form-enabled" checked>
+                                    <div class="toggle-track">
+                                        <div class="toggle-thumb"></div>
+                                    </div>
+                                </div>
+                            </label>
+                        </div>
                     </div>
 
-                    <!-- Dynamic Logs Container -->
-                    <div id="storyban-container" class="logs-list">
-                        <!-- Empty State -->
-                        <div class="empty-state">
-                            <div class="empty-icon-wrap">
-                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>
-                            </div>
-                            <p>No storybans detected yet.<br>Listening to sectors...</p>
-                        </div>
-                        <!-- Logs will be dynamically injected here -->
-                    </div>
-                </div>
-            </main>
+                    <div id="form-error" class="form-error hidden"></div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn-ghost" id="btn-modal-cancel">Cancel</button>
+                <button type="button" class="btn-primary" id="btn-modal-save">
+                    <span id="btn-save-label">Save Schedule</span>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Delete Confirm Modal -->
+    <div class="modal-overlay hidden" id="delete-modal" role="dialog" aria-modal="true" aria-labelledby="delete-modal-title">
+        <div class="modal modal-sm glass-panel">
+            <div class="modal-header">
+                <h3 id="delete-modal-title">Delete Schedule</h3>
+                <button class="modal-close" id="delete-modal-close" aria-label="Close">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                </button>
+            </div>
+            <div class="modal-body">
+                <p class="delete-confirm-text">Are you sure you want to delete <strong id="delete-target-name"></strong>?<br>This action cannot be undone.</p>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn-ghost" id="btn-delete-cancel">Cancel</button>
+                <button type="button" class="btn-danger" id="btn-delete-confirm">Delete</button>
+            </div>
         </div>
     </div>
 
