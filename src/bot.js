@@ -1,8 +1,10 @@
 const { Telegraf, Markup } = require('telegraf');
 const Group = require('./models/Group');
 const Job = require('./models/Job');
+const BotMessage = require('./models/BotMessage');
+const PendingDeletion = require('./models/PendingDeletion');
 const { isWhitelisted, whitelistOnly } = require('./middleware/whitelist');
-const { PRESETS } = require('./utils/cronPresets');
+const { PRESETS, AUTO_DELETE_PRESETS } = require('./utils/cronPresets');
 const { scheduleJob, unscheduleJob } = require('./scheduler');
 const wizardState = require('./state');
 
@@ -49,6 +51,8 @@ async function sendGroupMenu(ctx, chatId) {
   const kb = Markup.inlineKeyboard([
     [Markup.button.callback(`📋 รายการข้อความซ้ำ (${jobCount})`, `job:list:${chatId}`)],
     [Markup.button.callback('➕ เพิ่มข้อความใหม่', `job:add:${chatId}`)],
+    [Markup.button.callback('🧹 ลบข้อความอื่นๆของบอทในกลุ่มนี้', `grp:cleanup:${chatId}`)],
+    [Markup.button.callback('🗑 ลบกลุ่มนี้ออกจากระบบ', `grp:delrequest:${chatId}`)],
     [Markup.button.callback('🔙 กลับไปเลือกกลุ่ม', 'back:groups')]
   ]);
   const opts = { parse_mode: 'HTML', ...kb };
@@ -56,6 +60,48 @@ async function sendGroupMenu(ctx, chatId) {
     return ctx.editMessageText(text, opts).catch(() => ctx.reply(text, opts));
   }
   return ctx.reply(text, opts);
+}
+
+// deletes bot's own non-broadcast messages logged in this group (e.g. /register confirmations)
+async function cleanupBotMessages(ctx, chatId) {
+  const msgs = await BotMessage.find({ chatId });
+  let deleted = 0;
+  for (const m of msgs) {
+    try {
+      await bot.telegram.deleteMessage(chatId, m.messageId);
+      deleted++;
+    } catch (err) {
+      // already gone / too old to delete via Bot API — ignore and drop the log entry anyway
+    }
+  }
+  await BotMessage.deleteMany({ chatId });
+  await ctx.answerCbQuery(`ลบแล้ว ${deleted} ข้อความ`).catch(() => {});
+  return sendGroupMenu(ctx, chatId);
+}
+
+async function sendDeleteGroupConfirm(ctx, chatId) {
+  const group = await Group.findOne({ chatId });
+  const text =
+    `⚠️ ยืนยันลบกลุ่ม <b>${group?.title || chatId}</b> ออกจากระบบ?\n` +
+    `ข้อความซ้ำทั้งหมดของกลุ่มนี้จะถูกลบด้วย (บอทจะยังอยู่ในกลุ่มเทเลแกรมตามเดิม ไม่ได้ออกจากกลุ่ม)`;
+  const kb = Markup.inlineKeyboard([
+    [Markup.button.callback('✅ ยืนยันลบ', `grp:delconfirm:${chatId}`)],
+    [Markup.button.callback('❌ ยกเลิก', `grp:delcancel:${chatId}`)]
+  ]);
+  const opts = { parse_mode: 'HTML', ...kb };
+  return ctx.editMessageText(text, opts).catch(() => ctx.reply(text, opts));
+}
+
+async function deleteGroupConfirmed(ctx, chatId) {
+  const jobs = await Job.find({ chatId });
+  jobs.forEach((j) => unscheduleJob(j._id));
+  await Job.deleteMany({ chatId });
+  await Group.deleteOne({ chatId });
+  await BotMessage.deleteMany({ chatId });
+  await PendingDeletion.deleteMany({ chatId });
+  const text = '🗑 ลบกลุ่มออกจากระบบเรียบร้อยแล้ว';
+  await ctx.editMessageText(text).catch(() => ctx.reply(text));
+  return sendGroupList(ctx);
 }
 
 async function sendJobList(ctx, chatId) {
@@ -94,7 +140,8 @@ async function sendJobView(ctx, chatId, jobId) {
     `⏱ ความถี่: ${job.intervalLabel || job.cron}\n` +
     `สถานะ: ${job.enabled ? '✅ เปิดใช้งาน' : '⏸ ปิดใช้งาน'}\n` +
     `📌 ปักหมุด: ${job.pin ? 'เปิด' : 'ปิด'}\n` +
-    (job.pin ? `🔔 แจ้งเตือนตอนปักหมุด: ${job.pinNotify ? 'เปิด' : 'ปิด'}\n` : '');
+    (job.pin ? `🔔 แจ้งเตือนตอนปักหมุด: ${job.pinNotify ? 'เปิด' : 'ปิด'}\n` : '') +
+    `⏳ ลบข้อความอัตโนมัติ: ${job.autoDeleteMinutes > 0 ? `${job.autoDeleteMinutes} นาทีหลังส่ง` : 'ปิด'}\n`;
 
   const rows = [
     [
@@ -114,6 +161,7 @@ async function sendJobView(ctx, chatId, jobId) {
     ]);
   }
   rows.push([Markup.button.callback('⏱ เปลี่ยนช่วงเวลา', `job:interval:${chatId}:${job._id}`)]);
+  rows.push([Markup.button.callback('⏳ ตั้งเวลาลบข้อความอัตโนมัติ', `job:autodel:${chatId}:${job._id}`)]);
   rows.push([Markup.button.callback('🗑 ลบรายการนี้', `job:delete:${chatId}:${job._id}`)]);
   rows.push([Markup.button.callback('🔙 กลับ', `job:list:${chatId}`)]);
 
@@ -130,6 +178,14 @@ function intervalKeyboard(chatId, jobId) {
   return Markup.inlineKeyboard(rows);
 }
 
+function autoDeleteKeyboard(chatId, jobId) {
+  const rows = Object.entries(AUTO_DELETE_PRESETS).map(([code, p]) => [
+    Markup.button.callback(p.label, `autodel:set:${chatId}:${jobId}:${code}`)
+  ]);
+  rows.push([Markup.button.callback('🔙 กลับ', `job:view:${chatId}:${jobId}`)]);
+  return Markup.inlineKeyboard(rows);
+}
+
 // ---------- commands ----------
 
 bot.command('start', whitelistOnly(), async (ctx) => {
@@ -141,9 +197,10 @@ bot.command('register', async (ctx) => {
   if (ctx.chat.type !== 'group' && ctx.chat.type !== 'supergroup') {
     return ctx.reply('ใช้คำสั่งนี้ในกลุ่มเท่านั้น');
   }
-  if (!isWhitelisted(ctx.from.id)) return ctx.reply('⛔ คุณไม่มีสิทธิ์ใช้งานคำสั่งนี้');
+  if (!isWhitelisted(ctx.from.id)) return; // silent — no reply for non-whitelisted users
   await upsertGroup(ctx.chat);
-  return ctx.reply('✅ ลงทะเบียนกลุ่มนี้แล้ว ไปที่แชทส่วนตัวกับบอทแล้วพิมพ์ /start เพื่อตั้งค่า');
+  const sent = await ctx.reply('✅ ลงทะเบียนกลุ่มนี้แล้ว ไปที่แชทส่วนตัวกับบอทแล้วพิมพ์ /start เพื่อตั้งค่า');
+  await BotMessage.create({ chatId: ctx.chat.id, messageId: sent.message_id });
 });
 
 // auto-register when bot is added to a group
@@ -161,7 +218,7 @@ bot.on('my_chat_member', async (ctx) => {
 // ---------- callback query router ----------
 
 bot.on('callback_query', async (ctx) => {
-  if (!isWhitelisted(ctx.from.id)) return ctx.answerCbQuery('⛔ ไม่มีสิทธิ์').catch(() => {});
+  if (!isWhitelisted(ctx.from.id)) return ctx.answerCbQuery().catch(() => {});
   const data = ctx.callbackQuery.data;
   await ctx.answerCbQuery().catch(() => {});
 
@@ -170,8 +227,16 @@ bot.on('callback_query', async (ctx) => {
   const [ns, ...rest] = data.split(':');
 
   if (ns === 'grp') {
-    const [chatId] = rest;
-    return sendGroupMenu(ctx, Number(chatId));
+    // "grp:<chatId>" (open menu) vs "grp:<action>:<chatId>" (sub-action)
+    if (rest.length === 1) {
+      return sendGroupMenu(ctx, Number(rest[0]));
+    }
+    const [action, chatId] = rest;
+    if (action === 'cleanup') return cleanupBotMessages(ctx, Number(chatId));
+    if (action === 'delrequest') return sendDeleteGroupConfirm(ctx, Number(chatId));
+    if (action === 'delconfirm') return deleteGroupConfirmed(ctx, Number(chatId));
+    if (action === 'delcancel') return sendGroupMenu(ctx, Number(chatId));
+    return;
   }
 
   if (ns === 'job') {
@@ -215,6 +280,12 @@ bot.on('callback_query', async (ctx) => {
       );
     }
 
+    if (action === 'autodel') {
+      return ctx
+        .editMessageText('⏳ เลือกเวลาลบข้อความอัตโนมัติ (นับจากตอนส่ง/ปักหมุด):', autoDeleteKeyboard(chatId, jobId))
+        .catch(() => ctx.reply('⏳ เลือกเวลาลบข้อความอัตโนมัติ (นับจากตอนส่ง/ปักหมุด):', autoDeleteKeyboard(chatId, jobId)));
+    }
+
     if (action === 'delete') {
       await Job.deleteOne({ _id: jobId });
       unscheduleJob(jobId);
@@ -241,6 +312,38 @@ bot.on('callback_query', async (ctx) => {
         '✏️ พิมพ์ cron expression (5 ช่อง, เวลา Asia/Bangkok)\nตัวอย่าง: 0 */2 * * *  (ทุก 2 ชั่วโมง)'
       );
     }
+  }
+
+  if (ns === 'autodel') {
+    const [action, chatId, jobId, code] = rest;
+    if (action === 'set') {
+      const preset = AUTO_DELETE_PRESETS[code];
+      if (!preset) return;
+      const job = await Job.findById(jobId);
+      if (!job) return;
+      job.autoDeleteMinutes = preset.minutes;
+      await job.save();
+      return sendJobView(ctx, Number(chatId), jobId);
+    }
+  }
+
+  // "newjob:interval:<code>" — interval step of the add-new-message wizard.
+  // Handled here (not via a separate bot.action) so it isn't shadowed by this catch-all.
+  if (ns === 'newjob') {
+    const [sub, code] = rest;
+    if (sub !== 'interval') return;
+    const st = wizardState.get(ctx.from.id);
+    if (!st) return;
+
+    if (code === 'custom') {
+      st.step = 'awaiting_new_cron';
+      wizardState.set(ctx.from.id, st);
+      return ctx.reply('✏️ พิมพ์ cron expression (5 ช่อง, เวลา Asia/Bangkok)\nตัวอย่าง: 0 */2 * * *');
+    }
+
+    const preset = PRESETS[code];
+    if (!preset) return;
+    return finalizeNewJob(ctx, st, preset.cron, preset.label);
   }
 });
 
@@ -315,23 +418,5 @@ async function finalizeNewJob(ctx, st, cronExpr, label) {
   await ctx.reply('✅ เพิ่มข้อความซ้ำเรียบร้อยแล้ว');
   return sendJobView(ctx, st.chatId, job._id);
 }
-
-bot.action(/^newjob:interval:(.+)$/, async (ctx) => {
-  if (!isWhitelisted(ctx.from.id)) return ctx.answerCbQuery('⛔ ไม่มีสิทธิ์').catch(() => {});
-  await ctx.answerCbQuery().catch(() => {});
-  const code = ctx.match[1];
-  const st = wizardState.get(ctx.from.id);
-  if (!st) return;
-
-  if (code === 'custom') {
-    st.step = 'awaiting_new_cron';
-    wizardState.set(ctx.from.id, st);
-    return ctx.reply('✏️ พิมพ์ cron expression (5 ช่อง, เวลา Asia/Bangkok)\nตัวอย่าง: 0 */2 * * *');
-  }
-
-  const preset = PRESETS[code];
-  if (!preset) return;
-  return finalizeNewJob(ctx, st, preset.cron, preset.label);
-});
 
 module.exports = bot;

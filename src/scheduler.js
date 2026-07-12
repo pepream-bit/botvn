@@ -1,5 +1,6 @@
 const cron = require('node-cron');
 const Job = require('./models/Job');
+const PendingDeletion = require('./models/PendingDeletion');
 
 const tasks = new Map(); // jobId(string) -> cron ScheduledTask
 
@@ -22,9 +23,34 @@ async function sendJob(bot, jobId) {
     }
     job.lastMessageId = msg.message_id;
     await job.save();
+
+    if (job.autoDeleteMinutes > 0) {
+      await PendingDeletion.create({
+        chatId: job.chatId,
+        messageId: msg.message_id,
+        deleteAt: new Date(Date.now() + job.autoDeleteMinutes * 60000)
+      });
+    }
   } catch (err) {
     console.error(`[job ${job._id}] send failed:`, err.message);
   }
+}
+
+// Stored in Mongo (not setTimeout) so scheduled deletions survive a Render restart.
+async function sweepPendingDeletions(bot) {
+  const due = await PendingDeletion.find({ deleteAt: { $lte: new Date() } });
+  for (const d of due) {
+    try {
+      await bot.telegram.deleteMessage(d.chatId, d.messageId);
+    } catch (err) {
+      // already deleted / too old for the Bot API to remove — ignore
+    }
+    await PendingDeletion.deleteOne({ _id: d._id });
+  }
+}
+
+function startDeletionSweeper(bot) {
+  cron.schedule('* * * * *', () => sweepPendingDeletions(bot), { timezone: 'Asia/Bangkok' });
 }
 
 function unscheduleJob(jobId) {
@@ -55,4 +81,11 @@ async function loadAllJobs(bot) {
   console.log(`Loaded ${jobs.length} active job(s).`);
 }
 
-module.exports = { scheduleJob, unscheduleJob, loadAllJobs, sendJob };
+module.exports = {
+  scheduleJob,
+  unscheduleJob,
+  loadAllJobs,
+  sendJob,
+  startDeletionSweeper,
+  sweepPendingDeletions
+};

@@ -2,7 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const { connectDB } = require('./db');
 const bot = require('./bot');
-const { loadAllJobs } = require('./scheduler');
+const { loadAllJobs, startDeletionSweeper } = require('./scheduler');
 
 async function main() {
   if (!process.env.BOT_TOKEN) throw new Error('BOT_TOKEN is missing');
@@ -10,6 +10,7 @@ async function main() {
 
   await connectDB();
   await loadAllJobs(bot);
+  startDeletionSweeper(bot);
 
   // Render web services require an open HTTP port — bind this BEFORE
   // launching the bot, since bot.launch() never resolves in polling mode.

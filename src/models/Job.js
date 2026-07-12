@@ -8,6 +8,7 @@ const jobSchema = new mongoose.Schema({
   pin: { type: Boolean, default: false },
   pinNotify: { type: Boolean, default: true }, // true = notify on pin, false = silent pin
   enabled: { type: Boolean, default: true },
+  autoDeleteMinutes: { type: Number, default: 0 }, // 0 = never auto-delete
   lastMessageId: { type: Number, default: null },
   createdBy: { type: Number },
   createdAt: { type: Date, default: Date.now }
