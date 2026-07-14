@@ -2,15 +2,14 @@ require('dotenv').config();
 const express = require('express');
 const { connectDB } = require('./db');
 const bot = require('./bot');
-const { loadAllJobs, startDeletionSweeper } = require('./scheduler');
+const { startEngine } = require('./scheduler');
 
 async function main() {
   if (!process.env.BOT_TOKEN) throw new Error('BOT_TOKEN is missing');
   if (!process.env.MONGODB_URI) throw new Error('MONGODB_URI is missing');
 
   await connectDB();
-  await loadAllJobs(bot);
-  startDeletionSweeper(bot);
+  startEngine(bot);
 
   // Render web services require an open HTTP port — bind this BEFORE
   // launching the bot, since bot.launch() never resolves in polling mode.

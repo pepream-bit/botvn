@@ -4,11 +4,20 @@ const Job = require('./models/Job');
 const BotMessage = require('./models/BotMessage');
 const PendingDeletion = require('./models/PendingDeletion');
 const { isWhitelisted, whitelistOnly } = require('./middleware/whitelist');
-const { PRESETS, AUTO_DELETE_PRESETS } = require('./utils/cronPresets');
-const { scheduleJob, unscheduleJob } = require('./scheduler');
+const { parseDuration, formatDuration } = require('./utils/duration');
+const { parseTimeOfDay, formatTimeOfDay } = require('./utils/timeOfDay');
+const { computeInitialNextRun } = require('./utils/schedule');
+const { parseUrlButtonLines, buildUrlButtonsMarkup } = require('./utils/urlButtons');
 const wizardState = require('./state');
 
 const bot = new Telegraf(process.env.BOT_TOKEN);
+
+const REPLY_FN = {
+  photo: 'replyWithPhoto',
+  video: 'replyWithVideo',
+  document: 'replyWithDocument',
+  animation: 'replyWithAnimation'
+};
 
 // ---------- helpers ----------
 
@@ -25,11 +34,23 @@ async function upsertGroup(chat) {
   );
 }
 
+// logs a bot message sent INTO A GROUP (not a broadcast job message) so it can
+// be bulk-cleaned later, and schedules its auto-delete if the group has one set
+async function logGroupMessage(chatId, messageId) {
+  await BotMessage.create({ chatId, messageId });
+  const group = await Group.findOne({ chatId });
+  if (group && group.autoCleanupSeconds > 0) {
+    await PendingDeletion.create({
+      chatId,
+      messageId,
+      deleteAt: new Date(Date.now() + group.autoCleanupSeconds * 1000)
+    });
+  }
+}
+
 async function groupListKeyboard() {
   const groups = await Group.find().sort({ title: 1 });
-  const rows = groups.map((g) => [
-    Markup.button.callback(g.title, `grp:${g.chatId}`)
-  ]);
+  const rows = groups.map((g) => [Markup.button.callback(g.title, `grp:${g.chatId}`)]);
   return { groups, keyboard: Markup.inlineKeyboard(rows) };
 }
 
@@ -47,22 +68,25 @@ async function sendGroupMenu(ctx, chatId) {
   const group = await Group.findOne({ chatId });
   if (!group) return ctx.answerCbQuery('ไม่พบกลุ่มนี้').catch(() => {});
   const jobCount = await Job.countDocuments({ chatId });
-  const text = `⚙️ กลุ่ม: <b>${group.title}</b>\nข้อความซ้ำที่ตั้งไว้: ${jobCount} รายการ`;
+  const cleanupLabel =
+    group.autoCleanupSeconds > 0 ? `อัตโนมัติ: ${formatDuration(group.autoCleanupSeconds)}` : 'อัตโนมัติ: ปิด';
+  const text =
+    `⚙️ กลุ่ม: <b>${group.title}</b>\n` +
+    `ข้อความซ้ำที่ตั้งไว้: ${jobCount} รายการ\n` +
+    `🧹 ลบข้อความอื่นๆของบอท: ${cleanupLabel}`;
   const kb = Markup.inlineKeyboard([
     [Markup.button.callback(`📋 รายการข้อความซ้ำ (${jobCount})`, `job:list:${chatId}`)],
     [Markup.button.callback('➕ เพิ่มข้อความใหม่', `job:add:${chatId}`)],
-    [Markup.button.callback('🧹 ลบข้อความอื่นๆของบอทในกลุ่มนี้', `grp:cleanup:${chatId}`)],
+    [Markup.button.callback('🧹 ลบข้อความอื่นๆของบอทตอนนี้', `grp:cleanup:${chatId}`)],
+    [Markup.button.callback('⏱ ตั้งเวลาลบข้อความอื่นๆอัตโนมัติ', `grp:autocleanup:${chatId}`)],
     [Markup.button.callback('🗑 ลบกลุ่มนี้ออกจากระบบ', `grp:delrequest:${chatId}`)],
     [Markup.button.callback('🔙 กลับไปเลือกกลุ่ม', 'back:groups')]
   ]);
   const opts = { parse_mode: 'HTML', ...kb };
-  if (ctx.callbackQuery) {
-    return ctx.editMessageText(text, opts).catch(() => ctx.reply(text, opts));
-  }
+  if (ctx.callbackQuery) return ctx.editMessageText(text, opts).catch(() => ctx.reply(text, opts));
   return ctx.reply(text, opts);
 }
 
-// deletes bot's own non-broadcast messages logged in this group (e.g. /register confirmations)
 async function cleanupBotMessages(ctx, chatId) {
   const msgs = await BotMessage.find({ chatId });
   let deleted = 0;
@@ -71,10 +95,11 @@ async function cleanupBotMessages(ctx, chatId) {
       await bot.telegram.deleteMessage(chatId, m.messageId);
       deleted++;
     } catch (err) {
-      // already gone / too old to delete via Bot API — ignore and drop the log entry anyway
+      // already gone / too old to delete via Bot API — ignore
     }
   }
   await BotMessage.deleteMany({ chatId });
+  await PendingDeletion.deleteMany({ chatId, messageId: { $in: msgs.map((m) => m.messageId) } });
   await ctx.answerCbQuery(`ลบแล้ว ${deleted} ข้อความ`).catch(() => {});
   return sendGroupMenu(ctx, chatId);
 }
@@ -93,8 +118,6 @@ async function sendDeleteGroupConfirm(ctx, chatId) {
 }
 
 async function deleteGroupConfirmed(ctx, chatId) {
-  const jobs = await Job.find({ chatId });
-  jobs.forEach((j) => unscheduleJob(j._id));
   await Job.deleteMany({ chatId });
   await Group.deleteOne({ chatId });
   await BotMessage.deleteMany({ chatId });
@@ -113,16 +136,19 @@ async function sendJobList(ctx, chatId) {
       [Markup.button.callback('🔙 กลับ', `grp:${chatId}`)]
     ]);
     const text = `กลุ่ม <b>${group?.title || chatId}</b> ยังไม่มีข้อความซ้ำ`;
-    return ctx.editMessageText(text, { parse_mode: 'HTML', ...kb }).catch(() => ctx.reply(text, { parse_mode: 'HTML', ...kb }));
+    const opts = { parse_mode: 'HTML', ...kb };
+    return ctx.editMessageText(text, opts).catch(() => ctx.reply(text, opts));
   }
   const rows = jobs.map((j) => {
-    const icon = j.enabled ? '✅' : '⏸';
-    const pinIcon = j.pin ? '📌' : '';
+    const statusIcon = j.enabled ? '✅' : '⏸';
+    const chips = [
+      j.text ? '📄' : '',
+      j.media && j.media.fileId ? '🖼' : '',
+      j.urlButtons && j.urlButtons.length ? '🔗' : ''
+    ].join('');
+    const preview = j.text ? truncate(j.text.replace(/\n/g, ' '), 22) : '(ยังไม่มีข้อความ)';
     return [
-      Markup.button.callback(
-        `${icon}${pinIcon} ${truncate(j.text.replace(/\n/g, ' '), 28)}`,
-        `job:view:${chatId}:${j._id}`
-      )
+      Markup.button.callback(`${statusIcon} ${chips || '·'} ${preview}`, `job:view:${chatId}:${j._id}`)
     ];
   });
   rows.push([Markup.button.callback('➕ เพิ่มข้อความใหม่', `job:add:${chatId}`)]);
@@ -132,25 +158,49 @@ async function sendJobList(ctx, chatId) {
   return ctx.editMessageText(text, opts).catch(() => ctx.reply(text, opts));
 }
 
-async function sendJobView(ctx, chatId, jobId) {
+// the "recurring message" content-builder screen (Text / Media / Url Buttons)
+async function renderJobBuilder(ctx, chatId, jobId) {
   const job = await Job.findById(jobId);
   if (!job) return ctx.answerCbQuery('ไม่พบรายการนี้').catch(() => {});
+
+  const hasText = !!job.text;
+  const hasMedia = !!(job.media && job.media.fileId);
+  const btnCount = job.urlButtons ? job.urlButtons.length : 0;
+
   const text =
-    `📝 <b>ข้อความ</b>\n${job.text}\n\n` +
-    `⏱ ความถี่: ${job.intervalLabel || job.cron}\n` +
+    `🕐 <b>ข้อความซ้ำ</b>\n\n` +
+    `📄 Text ${hasText ? '✅' : '❌'}\n` +
+    `🖼 Media ${hasMedia ? '✅' : '❌'}\n` +
+    `🔗 Url Buttons (${btnCount}) ${btnCount ? '✅' : '❌'}\n\n` +
+    `☝️ ใช้ปุ่มด้านล่างเพื่อเลือกสิ่งที่ต้องการตั้งค่า\n\n` +
+    `⏱ ความถี่: ${job.intervalLabel}\n` +
+    `🕐 เริ่มส่งเวลา: ${formatTimeOfDay(job.startHour, job.startMinute)} น.\n` +
     `สถานะ: ${job.enabled ? '✅ เปิดใช้งาน' : '⏸ ปิดใช้งาน'}\n` +
     `📌 ปักหมุด: ${job.pin ? 'เปิด' : 'ปิด'}\n` +
     (job.pin ? `🔔 แจ้งเตือนตอนปักหมุด: ${job.pinNotify ? 'เปิด' : 'ปิด'}\n` : '') +
-    `⏳ ลบข้อความอัตโนมัติ: ${job.autoDeleteMinutes > 0 ? `${job.autoDeleteMinutes} นาทีหลังส่ง` : 'ปิด'}\n`;
+    `⏳ ลบข้อความอัตโนมัติ: ${formatDuration(job.autoDeleteSeconds)}`;
 
   const rows = [
     [
-      Markup.button.callback(
-        job.enabled ? '⏸ ปิดใช้งาน' : '▶️ เปิดใช้งาน',
-        `job:toggle:${chatId}:${job._id}`
-      )
+      Markup.button.callback('📄 Text', `job:settext:${chatId}:${job._id}`),
+      Markup.button.callback('👀 ดู', `job:seetext:${chatId}:${job._id}`)
     ],
-    [Markup.button.callback(job.pin ? '📌 ปิดการปักหมุด' : '📌 เปิดการปักหมุด', `job:pin:${chatId}:${job._id}`)]
+    [
+      Markup.button.callback('🖼 Media', `job:setmedia:${chatId}:${job._id}`),
+      Markup.button.callback('👀 ดู', `job:seemedia:${chatId}:${job._id}`)
+    ],
+    [
+      Markup.button.callback('🔗 Url Buttons', `job:seturlbtn:${chatId}:${job._id}`),
+      Markup.button.callback('👀 ดู', `job:seeurlbtn:${chatId}:${job._id}`)
+    ],
+    [Markup.button.callback('👀 Full preview', `job:preview:${chatId}:${job._id}`)],
+    [Markup.button.callback('⏱ ตั้งความถี่ & เวลาเริ่ม', `job:schedule:${chatId}:${job._id}`)],
+    [
+      Markup.button.callback(job.enabled ? '⏸ ปิดใช้งาน' : '▶️ เปิดใช้งาน', `job:toggle:${chatId}:${job._id}`)
+    ],
+    [
+      Markup.button.callback(job.pin ? '📌 ปิดการปักหมุด' : '📌 เปิดการปักหมุด', `job:pin:${chatId}:${job._id}`)
+    ]
   ];
   if (job.pin) {
     rows.push([
@@ -160,30 +210,12 @@ async function sendJobView(ctx, chatId, jobId) {
       )
     ]);
   }
-  rows.push([Markup.button.callback('⏱ เปลี่ยนช่วงเวลา', `job:interval:${chatId}:${job._id}`)]);
   rows.push([Markup.button.callback('⏳ ตั้งเวลาลบข้อความอัตโนมัติ', `job:autodel:${chatId}:${job._id}`)]);
   rows.push([Markup.button.callback('🗑 ลบรายการนี้', `job:delete:${chatId}:${job._id}`)]);
   rows.push([Markup.button.callback('🔙 กลับ', `job:list:${chatId}`)]);
 
   const opts = { parse_mode: 'HTML', ...Markup.inlineKeyboard(rows) };
   return ctx.editMessageText(text, opts).catch(() => ctx.reply(text, opts));
-}
-
-function intervalKeyboard(chatId, jobId) {
-  const rows = Object.entries(PRESETS).map(([code, p]) => [
-    Markup.button.callback(p.label, `interval:set:${chatId}:${jobId}:${code}`)
-  ]);
-  rows.push([Markup.button.callback('✏️ กำหนดเอง (custom cron)', `interval:custom:${chatId}:${jobId}`)]);
-  rows.push([Markup.button.callback('🔙 กลับ', `job:view:${chatId}:${jobId}`)]);
-  return Markup.inlineKeyboard(rows);
-}
-
-function autoDeleteKeyboard(chatId, jobId) {
-  const rows = Object.entries(AUTO_DELETE_PRESETS).map(([code, p]) => [
-    Markup.button.callback(p.label, `autodel:set:${chatId}:${jobId}:${code}`)
-  ]);
-  rows.push([Markup.button.callback('🔙 กลับ', `job:view:${chatId}:${jobId}`)]);
-  return Markup.inlineKeyboard(rows);
 }
 
 // ---------- commands ----------
@@ -200,7 +232,7 @@ bot.command('register', async (ctx) => {
   if (!isWhitelisted(ctx.from.id)) return; // silent — no reply for non-whitelisted users
   await upsertGroup(ctx.chat);
   const sent = await ctx.reply('✅ ลงทะเบียนกลุ่มนี้แล้ว ไปที่แชทส่วนตัวกับบอทแล้วพิมพ์ /start เพื่อตั้งค่า');
-  await BotMessage.create({ chatId: ctx.chat.id, messageId: sent.message_id });
+  await logGroupMessage(ctx.chat.id, sent.message_id);
 });
 
 // auto-register when bot is added to a group
@@ -212,6 +244,8 @@ bot.on('my_chat_member', async (ctx) => {
   } else if (['left', 'kicked'].includes(newStatus)) {
     await Group.deleteOne({ chatId: upd.chat.id });
     await Job.deleteMany({ chatId: upd.chat.id });
+    await BotMessage.deleteMany({ chatId: upd.chat.id });
+    await PendingDeletion.deleteMany({ chatId: upd.chat.id });
   }
 });
 
@@ -222,40 +256,126 @@ bot.on('callback_query', async (ctx) => {
   const data = ctx.callbackQuery.data;
   await ctx.answerCbQuery().catch(() => {});
 
-  if (data === 'back:groups') return sendGroupList(ctx).catch(() => {}) && ctx.deleteMessage().catch(() => {});
+  if (data === 'back:groups') {
+    await sendGroupList(ctx).catch(() => {});
+    return ctx.deleteMessage().catch(() => {});
+  }
 
   const [ns, ...rest] = data.split(':');
 
   if (ns === 'grp') {
     // "grp:<chatId>" (open menu) vs "grp:<action>:<chatId>" (sub-action)
-    if (rest.length === 1) {
-      return sendGroupMenu(ctx, Number(rest[0]));
-    }
+    if (rest.length === 1) return sendGroupMenu(ctx, Number(rest[0]));
     const [action, chatId] = rest;
     if (action === 'cleanup') return cleanupBotMessages(ctx, Number(chatId));
     if (action === 'delrequest') return sendDeleteGroupConfirm(ctx, Number(chatId));
     if (action === 'delconfirm') return deleteGroupConfirmed(ctx, Number(chatId));
     if (action === 'delcancel') return sendGroupMenu(ctx, Number(chatId));
+    if (action === 'autocleanup') {
+      wizardState.set(ctx.from.id, { step: 'awaiting_group_autocleanup', chatId: Number(chatId) });
+      return ctx.reply(
+        '⏱ พิมพ์เวลาลบข้อความอื่นๆของบอทอัตโนมัติ (ข้อความที่ไม่ใช่ broadcast เช่น ข้อความยืนยันคำสั่ง)\n' +
+          'รูปแบบ: 30s, 10m, 1h\nพิมพ์ "ปิด" เพื่อปิด (ลบด้วยมือผ่านปุ่ม 🧹 เท่านั้น)'
+      );
+    }
     return;
   }
 
   if (ns === 'job') {
     const [action, chatId, jobId] = rest;
+
     if (action === 'list') return sendJobList(ctx, Number(chatId));
-    if (action === 'view') return sendJobView(ctx, Number(chatId), jobId);
+    if (action === 'view') return renderJobBuilder(ctx, Number(chatId), jobId);
 
     if (action === 'add') {
-      wizardState.set(ctx.from.id, { step: 'awaiting_text', chatId: Number(chatId) });
-      return ctx.reply('✏️ พิมพ์ข้อความที่ต้องการให้บอทส่งซ้ำ (รองรับ HTML tag เช่น <b>ตัวหนา</b>)');
+      const job = await Job.create({
+        chatId: Number(chatId),
+        createdBy: ctx.from.id,
+        nextRunAt: computeInitialNextRun(9, 0, 3600)
+      });
+      return renderJobBuilder(ctx, Number(chatId), job._id);
+    }
+
+    if (action === 'settext') {
+      wizardState.set(ctx.from.id, { step: 'awaiting_text', chatId: Number(chatId), jobId });
+      return ctx.reply(
+        '✏️ พิมพ์ข้อความที่ต้องการให้บอทส่ง (รองรับ HTML เช่น <b>ตัวหนา</b>)\nพิมพ์ "ลบ" เพื่อล้างข้อความ'
+      );
+    }
+    if (action === 'seetext') {
+      const job = await Job.findById(jobId);
+      return ctx.reply(job?.text ? `📄 ข้อความปัจจุบัน:\n\n${job.text}` : '📄 ยังไม่ได้ตั้งค่า Text', {
+        parse_mode: 'HTML'
+      });
+    }
+
+    if (action === 'setmedia') {
+      wizardState.set(ctx.from.id, { step: 'awaiting_media', chatId: Number(chatId), jobId });
+      return ctx.reply('🖼 ส่งรูปภาพ / วิดีโอ / ไฟล์ที่ต้องการแนบ\nพิมพ์ "ลบ" เพื่อล้าง Media');
+    }
+    if (action === 'seemedia') {
+      const job = await Job.findById(jobId);
+      if (!job || !job.media || !job.media.fileId) return ctx.reply('🖼 ยังไม่ได้ตั้งค่า Media');
+      const fn = REPLY_FN[job.media.type] || 'replyWithPhoto';
+      return ctx[fn](job.media.fileId, { caption: 'ตัวอย่าง Media ปัจจุบัน' });
+    }
+
+    if (action === 'seturlbtn') {
+      wizardState.set(ctx.from.id, { step: 'awaiting_urlbuttons', chatId: Number(chatId), jobId });
+      return ctx.reply(
+        '🔗 พิมพ์ปุ่ม รูปแบบ: ข้อความปุ่ม - ลิงก์\n' +
+          'ตัวอย่าง:\nเว็บไซต์ - https://example.com\nติดต่อแอดมิน - https://t.me/xxx\n\n' +
+          'พิมพ์ได้หลายบรรทัด (1 ปุ่ม/บรรทัด) — จะแทนที่ปุ่มเดิมทั้งหมด\n' +
+          'พิมพ์ "ลบ" เพื่อล้างปุ่มทั้งหมด'
+      );
+    }
+    if (action === 'seeurlbtn') {
+      const job = await Job.findById(jobId);
+      if (!job || !job.urlButtons || job.urlButtons.length === 0) return ctx.reply('🔗 ยังไม่ได้ตั้งค่า Url Buttons');
+      return ctx.reply('🔗 ปุ่มปัจจุบัน (กดทดสอบได้):', { reply_markup: buildUrlButtonsMarkup(job.urlButtons) });
+    }
+
+    if (action === 'preview') {
+      const job = await Job.findById(jobId);
+      const hasText = !!job?.text;
+      const hasMedia = !!(job?.media && job.media.fileId);
+      if (!job || (!hasText && !hasMedia)) {
+        return ctx.reply('👀 ยังไม่ได้ตั้งค่า Text หรือ Media เลย ไม่มีอะไรให้พรีวิว');
+      }
+      const reply_markup = buildUrlButtonsMarkup(job.urlButtons);
+      if (hasMedia) {
+        const fn = REPLY_FN[job.media.type] || 'replyWithPhoto';
+        return ctx[fn](job.media.fileId, { caption: job.text || undefined, parse_mode: 'HTML', reply_markup });
+      }
+      return ctx.reply(job.text, { parse_mode: 'HTML', reply_markup });
+    }
+
+    if (action === 'schedule') {
+      wizardState.set(ctx.from.id, { step: 'awaiting_interval', chatId: Number(chatId), jobId });
+      return ctx.reply(
+        '⏱ พิมพ์ความถี่ในการส่งซ้ำ\n' +
+          'รูปแบบ: 30s = 30 วินาที, 15m = 15 นาที, 2h = 2 ชั่วโมง, 1h30m = 1 ชม. 30 นาที\n' +
+          '(ขั้นต่ำ 30s เพื่อป้องกันการส่งถี่เกินไป)'
+      );
     }
 
     if (action === 'toggle') {
       const job = await Job.findById(jobId);
       if (!job) return;
-      job.enabled = !job.enabled;
+      if (!job.enabled) {
+        const hasContent = !!job.text || !!(job.media && job.media.fileId);
+        if (!hasContent) {
+          return ctx
+            .answerCbQuery('⚠️ กรุณาตั้งค่า Text หรือ Media ก่อนเปิดใช้งาน', { show_alert: true })
+            .catch(() => {});
+        }
+        job.nextRunAt = computeInitialNextRun(job.startHour, job.startMinute, job.intervalSeconds);
+        job.enabled = true;
+      } else {
+        job.enabled = false;
+      }
       await job.save();
-      scheduleJob(bot, job); // scheduleJob() unschedules internally when job.enabled is false
-      return sendJobView(ctx, Number(chatId), jobId);
+      return renderJobBuilder(ctx, Number(chatId), jobId);
     }
 
     if (action === 'pin') {
@@ -263,7 +383,7 @@ bot.on('callback_query', async (ctx) => {
       if (!job) return;
       job.pin = !job.pin;
       await job.save();
-      return sendJobView(ctx, Number(chatId), jobId);
+      return renderJobBuilder(ctx, Number(chatId), jobId);
     }
 
     if (action === 'pinnotify') {
@@ -271,152 +391,214 @@ bot.on('callback_query', async (ctx) => {
       if (!job) return;
       job.pinNotify = !job.pinNotify;
       await job.save();
-      return sendJobView(ctx, Number(chatId), jobId);
-    }
-
-    if (action === 'interval') {
-      return ctx.editMessageText('⏱ เลือกความถี่ในการส่ง:', intervalKeyboard(chatId, jobId)).catch(() =>
-        ctx.reply('⏱ เลือกความถี่ในการส่ง:', intervalKeyboard(chatId, jobId))
-      );
+      return renderJobBuilder(ctx, Number(chatId), jobId);
     }
 
     if (action === 'autodel') {
-      return ctx
-        .editMessageText('⏳ เลือกเวลาลบข้อความอัตโนมัติ (นับจากตอนส่ง/ปักหมุด):', autoDeleteKeyboard(chatId, jobId))
-        .catch(() => ctx.reply('⏳ เลือกเวลาลบข้อความอัตโนมัติ (นับจากตอนส่ง/ปักหมุด):', autoDeleteKeyboard(chatId, jobId)));
+      wizardState.set(ctx.from.id, { step: 'awaiting_autodelete', chatId: Number(chatId), jobId });
+      return ctx.reply(
+        '⏳ พิมพ์เวลาลบข้อความอัตโนมัติ หลังส่ง/ปักหมุด\n' +
+          'รูปแบบ: 30s, 10m, 1h, 1h30m\nพิมพ์ "ปิด" เพื่อปิดการลบอัตโนมัติ'
+      );
     }
 
     if (action === 'delete') {
       await Job.deleteOne({ _id: jobId });
-      unscheduleJob(jobId);
       return sendJobList(ctx, Number(chatId));
     }
   }
-
-  if (ns === 'interval') {
-    const [action, chatId, jobId, code] = rest;
-    if (action === 'set') {
-      const preset = PRESETS[code];
-      if (!preset) return;
-      const job = await Job.findById(jobId);
-      if (!job) return;
-      job.cron = preset.cron;
-      job.intervalLabel = preset.label;
-      await job.save();
-      scheduleJob(bot, job);
-      return sendJobView(ctx, Number(chatId), jobId);
-    }
-    if (action === 'custom') {
-      wizardState.set(ctx.from.id, { step: 'awaiting_cron', chatId: Number(chatId), jobId });
-      return ctx.reply(
-        '✏️ พิมพ์ cron expression (5 ช่อง, เวลา Asia/Bangkok)\nตัวอย่าง: 0 */2 * * *  (ทุก 2 ชั่วโมง)'
-      );
-    }
-  }
-
-  if (ns === 'autodel') {
-    const [action, chatId, jobId, code] = rest;
-    if (action === 'set') {
-      const preset = AUTO_DELETE_PRESETS[code];
-      if (!preset) return;
-      const job = await Job.findById(jobId);
-      if (!job) return;
-      job.autoDeleteMinutes = preset.minutes;
-      await job.save();
-      return sendJobView(ctx, Number(chatId), jobId);
-    }
-  }
-
-  // "newjob:interval:<code>" — interval step of the add-new-message wizard.
-  // Handled here (not via a separate bot.action) so it isn't shadowed by this catch-all.
-  if (ns === 'newjob') {
-    const [sub, code] = rest;
-    if (sub !== 'interval') return;
-    const st = wizardState.get(ctx.from.id);
-    if (!st) return;
-
-    if (code === 'custom') {
-      st.step = 'awaiting_new_cron';
-      wizardState.set(ctx.from.id, st);
-      return ctx.reply('✏️ พิมพ์ cron expression (5 ช่อง, เวลา Asia/Bangkok)\nตัวอย่าง: 0 */2 * * *');
-    }
-
-    const preset = PRESETS[code];
-    if (!preset) return;
-    return finalizeNewJob(ctx, st, preset.cron, preset.label);
-  }
 });
 
-// ---------- wizard text input (private chat only) ----------
+// ---------- wizard input (private chat only): text replies + media uploads ----------
 
-bot.on('text', async (ctx, next) => {
+bot.on('message', async (ctx, next) => {
   if (ctx.chat.type !== 'private') return next();
   if (!isWhitelisted(ctx.from.id)) return next();
   const st = wizardState.get(ctx.from.id);
   if (!st) return next();
 
-  if (st.step === 'awaiting_text') {
-    st.text = ctx.message.text;
-    st.step = 'awaiting_interval';
-    wizardState.set(ctx.from.id, st);
-    return ctx.reply('⏱ เลือกความถี่ในการส่ง:', intervalKeyboardForNewJob(st.chatId));
-  }
+  const text = ctx.message.text; // undefined for media-only messages
+  const raw = text ? text.trim() : '';
+  const rawLower = raw.toLowerCase();
 
-  if (st.step === 'awaiting_cron') {
-    const cronLib = require('node-cron');
-    const expr = ctx.message.text.trim();
-    if (!cronLib.validate(expr)) {
-      return ctx.reply('❌ cron expression ไม่ถูกต้อง ลองใหม่อีกครั้ง');
-    }
-    const job = await Job.findById(st.jobId);
-    if (job) {
-      job.cron = expr;
-      job.intervalLabel = `กำหนดเอง: ${expr}`;
+  switch (st.step) {
+    case 'awaiting_text': {
+      if (text === undefined) return ctx.reply('❌ พิมพ์ข้อความ (ตัวอักษร) เท่านั้น หรือพิมพ์ "ลบ" เพื่อล้าง');
+      const job = await Job.findById(st.jobId);
+      if (!job) {
+        wizardState.delete(ctx.from.id);
+        return;
+      }
+      job.text = rawLower === 'ลบ' ? '' : text;
       await job.save();
-      scheduleJob(bot, job);
       wizardState.delete(ctx.from.id);
-      return sendJobView(ctx, st.chatId, st.jobId);
+      await ctx.reply('✅ บันทึก Text แล้ว');
+      return renderJobBuilder(ctx, st.chatId, st.jobId);
     }
-    wizardState.delete(ctx.from.id);
-    return;
-  }
 
-  if (st.step === 'awaiting_new_cron') {
-    const cronLib = require('node-cron');
-    const expr = ctx.message.text.trim();
-    if (!cronLib.validate(expr)) {
-      return ctx.reply('❌ cron expression ไม่ถูกต้อง ลองใหม่อีกครั้ง');
+    case 'awaiting_media': {
+      if (text !== undefined) {
+        if (rawLower === 'ลบ') {
+          const job = await Job.findById(st.jobId);
+          if (!job) {
+            wizardState.delete(ctx.from.id);
+            return;
+          }
+          job.media = { fileId: null, type: null };
+          await job.save();
+          wizardState.delete(ctx.from.id);
+          await ctx.reply('✅ ล้าง Media แล้ว');
+          return renderJobBuilder(ctx, st.chatId, st.jobId);
+        }
+        return ctx.reply('❌ กรุณาส่งรูปภาพ/วิดีโอ/ไฟล์ หรือพิมพ์ "ลบ" เพื่อล้าง Media');
+      }
+      let fileId = null;
+      let type = null;
+      if (ctx.message.photo) {
+        fileId = ctx.message.photo[ctx.message.photo.length - 1].file_id;
+        type = 'photo';
+      } else if (ctx.message.video) {
+        fileId = ctx.message.video.file_id;
+        type = 'video';
+      } else if (ctx.message.document) {
+        fileId = ctx.message.document.file_id;
+        type = 'document';
+      } else if (ctx.message.animation) {
+        fileId = ctx.message.animation.file_id;
+        type = 'animation';
+      }
+      if (!fileId) return ctx.reply('❌ ชนิดไฟล์นี้ไม่รองรับ ส่งรูปภาพ/วิดีโอ/เอกสารเท่านั้น');
+      const job = await Job.findById(st.jobId);
+      if (!job) {
+        wizardState.delete(ctx.from.id);
+        return;
+      }
+      job.media = { fileId, type };
+      await job.save();
+      wizardState.delete(ctx.from.id);
+      await ctx.reply('✅ บันทึก Media แล้ว');
+      return renderJobBuilder(ctx, st.chatId, st.jobId);
     }
-    return finalizeNewJob(ctx, st, expr, `กำหนดเอง: ${expr}`);
-  }
 
-  return next();
+    case 'awaiting_urlbuttons': {
+      if (text === undefined) return ctx.reply('❌ พิมพ์ข้อความรูปแบบปุ่มเท่านั้น');
+      if (rawLower === 'ลบ' || rawLower === 'ลบทั้งหมด') {
+        const job = await Job.findById(st.jobId);
+        if (!job) {
+          wizardState.delete(ctx.from.id);
+          return;
+        }
+        job.urlButtons = [];
+        await job.save();
+        wizardState.delete(ctx.from.id);
+        await ctx.reply('✅ ล้าง Url Buttons แล้ว');
+        return renderJobBuilder(ctx, st.chatId, st.jobId);
+      }
+      const result = parseUrlButtonLines(text);
+      if (result.error) return ctx.reply(`❌ ${result.error}\nลองพิมพ์ใหม่อีกครั้ง`);
+      const job = await Job.findById(st.jobId);
+      if (!job) {
+        wizardState.delete(ctx.from.id);
+        return;
+      }
+      job.urlButtons = result.buttons;
+      await job.save();
+      wizardState.delete(ctx.from.id);
+      await ctx.reply(`✅ บันทึก Url Buttons แล้ว (${result.buttons.length} ปุ่ม)`);
+      return renderJobBuilder(ctx, st.chatId, st.jobId);
+    }
+
+    case 'awaiting_interval': {
+      if (text === undefined) return ctx.reply('❌ พิมพ์ความถี่เป็นตัวอักษร เช่น 30s, 15m, 2h');
+      const seconds = parseDuration(raw);
+      if (seconds === null || seconds < 30) {
+        return ctx.reply('❌ รูปแบบไม่ถูกต้อง หรือน้อยกว่าขั้นต่ำ 30 วินาที\nลองใหม่ เช่น 30s, 15m, 2h, 1h30m');
+      }
+      st.intervalSeconds = seconds;
+      st.intervalLabel = formatDuration(seconds);
+      st.step = 'awaiting_start_time';
+      wizardState.set(ctx.from.id, st);
+      return ctx.reply(
+        `⏱ ตั้งความถี่เป็น ${st.intervalLabel} แล้ว\n\n` +
+          '🕐 พิมพ์เวลาที่ต้องการให้เริ่มส่งครั้งแรก (24 ชม.) เช่น 09:00, 21:30\n' +
+          'หรือพิมพ์ "now" เพื่อเริ่มส่งรอบแรกทันที'
+      );
+    }
+
+    case 'awaiting_start_time': {
+      if (text === undefined) return ctx.reply('❌ พิมพ์เวลาเป็นตัวอักษร เช่น 09:00 หรือ "now"');
+      const job = await Job.findById(st.jobId);
+      if (!job) {
+        wizardState.delete(ctx.from.id);
+        return;
+      }
+      job.intervalSeconds = st.intervalSeconds;
+      job.intervalLabel = st.intervalLabel;
+      if (rawLower === 'now') {
+        const bkkNow = new Date(Date.now() + 7 * 60 * 60 * 1000);
+        job.startHour = bkkNow.getUTCHours();
+        job.startMinute = bkkNow.getUTCMinutes();
+        job.nextRunAt = new Date(); // fires on the next 15s tick
+      } else {
+        const t = parseTimeOfDay(raw);
+        if (!t) return ctx.reply('❌ รูปแบบเวลาไม่ถูกต้อง ลองใหม่ เช่น 09:00, 21:30 หรือพิมพ์ "now"');
+        job.startHour = t.hour;
+        job.startMinute = t.minute;
+        job.nextRunAt = computeInitialNextRun(t.hour, t.minute, st.intervalSeconds);
+      }
+      await job.save();
+      wizardState.delete(ctx.from.id);
+      await ctx.reply('✅ บันทึกตารางเวลาแล้ว');
+      return renderJobBuilder(ctx, st.chatId, st.jobId);
+    }
+
+    case 'awaiting_autodelete': {
+      if (text === undefined) return ctx.reply('❌ พิมพ์เวลาเป็นตัวอักษร เช่น 10m หรือ "ปิด"');
+      const job = await Job.findById(st.jobId);
+      if (!job) {
+        wizardState.delete(ctx.from.id);
+        return;
+      }
+      if (rawLower === 'ปิด' || rawLower === 'off') {
+        job.autoDeleteSeconds = 0;
+      } else {
+        const seconds = parseDuration(raw);
+        if (seconds === null || seconds < 5) {
+          return ctx.reply('❌ รูปแบบไม่ถูกต้อง ลองใหม่ เช่น 30s, 10m, 1h หรือพิมพ์ "ปิด"');
+        }
+        job.autoDeleteSeconds = seconds;
+      }
+      await job.save();
+      wizardState.delete(ctx.from.id);
+      await ctx.reply('✅ บันทึกการลบข้อความอัตโนมัติแล้ว');
+      return renderJobBuilder(ctx, st.chatId, st.jobId);
+    }
+
+    case 'awaiting_group_autocleanup': {
+      if (text === undefined) return ctx.reply('❌ พิมพ์เวลาเป็นตัวอักษร เช่น 10m หรือ "ปิด"');
+      const group = await Group.findOne({ chatId: st.chatId });
+      if (!group) {
+        wizardState.delete(ctx.from.id);
+        return;
+      }
+      if (rawLower === 'ปิด' || rawLower === 'off') {
+        group.autoCleanupSeconds = 0;
+      } else {
+        const seconds = parseDuration(raw);
+        if (seconds === null || seconds < 5) {
+          return ctx.reply('❌ รูปแบบไม่ถูกต้อง ลองใหม่ เช่น 30s, 10m, 1h หรือพิมพ์ "ปิด"');
+        }
+        group.autoCleanupSeconds = seconds;
+      }
+      await group.save();
+      wizardState.delete(ctx.from.id);
+      await ctx.reply('✅ บันทึกแล้ว');
+      return sendGroupMenu(ctx, st.chatId);
+    }
+
+    default:
+      return next();
+  }
 });
-
-function intervalKeyboardForNewJob(chatId) {
-  const rows = Object.entries(PRESETS).map(([code, p]) => [
-    Markup.button.callback(p.label, `newjob:interval:${code}`)
-  ]);
-  rows.push([Markup.button.callback('✏️ กำหนดเอง (custom cron)', 'newjob:interval:custom')]);
-  return Markup.inlineKeyboard(rows);
-}
-
-async function finalizeNewJob(ctx, st, cronExpr, label) {
-  const group = await Group.findOne({ chatId: st.chatId });
-  const job = await Job.create({
-    chatId: st.chatId,
-    text: st.text,
-    cron: cronExpr,
-    intervalLabel: label,
-    pin: false,
-    pinNotify: group ? group.pinNotifyDefault : true,
-    enabled: true,
-    createdBy: ctx.from.id
-  });
-  scheduleJob(bot, job);
-  wizardState.delete(ctx.from.id);
-  await ctx.reply('✅ เพิ่มข้อความซ้ำเรียบร้อยแล้ว');
-  return sendJobView(ctx, st.chatId, job._id);
-}
 
 module.exports = bot;
