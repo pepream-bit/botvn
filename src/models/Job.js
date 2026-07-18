@@ -5,6 +5,7 @@ const jobSchema = new mongoose.Schema({
 
   // ---- content (built piece by piece, like the "recurring message" screen) ----
   text: { type: String, default: '' },
+  textEntities: { type: mongoose.Schema.Types.Mixed, default: null }, // raw Telegram entities (preserves custom/animated emoji, bold, etc.)
   media: {
     fileId: { type: String, default: null },
     type: { type: String, enum: ['photo', 'video', 'document', 'animation', null], default: null }

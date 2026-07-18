@@ -8,6 +8,7 @@ const { parseDuration, formatDuration } = require('./utils/duration');
 const { parseTimeOfDay, formatTimeOfDay } = require('./utils/timeOfDay');
 const { computeInitialNextRun } = require('./utils/schedule');
 const { parseUrlButtonLines, buildUrlButtonsMarkup } = require('./utils/urlButtons');
+const { buildTextOptions, buildCaptionOptions } = require('./utils/textOptions');
 const wizardState = require('./state');
 
 const bot = new Telegraf(process.env.BOT_TOKEN);
@@ -317,9 +318,9 @@ bot.on('callback_query', async (ctx) => {
     }
     if (action === 'seetext') {
       const job = await Job.findById(jobId);
-      return ctx.reply(job?.text ? `📄 ข้อความปัจจุบัน:\n\n${job.text}` : '📄 ยังไม่ได้ตั้งค่า Text', {
-        parse_mode: 'HTML'
-      });
+      if (!job || !job.text) return ctx.reply('📄 ยังไม่ได้ตั้งค่า Text');
+      await ctx.reply('📄 ข้อความปัจจุบัน:');
+      return ctx.reply(job.text, buildTextOptions(job));
     }
 
     if (action === 'setmedia') {
@@ -383,9 +384,9 @@ bot.on('callback_query', async (ctx) => {
       const reply_markup = buildUrlButtonsMarkup(job.urlButtons, job._id);
       if (hasMedia) {
         const fn = REPLY_FN[job.media.type] || 'replyWithPhoto';
-        return ctx[fn](job.media.fileId, { caption: job.text || undefined, parse_mode: 'HTML', reply_markup });
+        return ctx[fn](job.media.fileId, { caption: job.text || undefined, ...buildCaptionOptions(job), reply_markup });
       }
-      return ctx.reply(job.text, { parse_mode: 'HTML', reply_markup });
+      return ctx.reply(job.text, { ...buildTextOptions(job), reply_markup });
     }
 
     if (action === 'schedule') {
@@ -523,7 +524,15 @@ bot.on('message', async (ctx, next) => {
         wizardState.delete(ctx.from.id);
         return;
       }
-      job.text = rawLower === 'ลบ' ? '' : text;
+      if (rawLower === 'ลบ') {
+        job.text = '';
+        job.textEntities = null;
+      } else {
+        job.text = text;
+        // ctx.message.entities preserves custom/animated emoji + any native
+        // formatting the admin used when typing — relayed as-is on send.
+        job.textEntities = ctx.message.entities && ctx.message.entities.length ? ctx.message.entities : null;
+      }
       await job.save();
       wizardState.delete(ctx.from.id);
       await ctx.reply('✅ บันทึก Text แล้ว');

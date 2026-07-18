@@ -4,6 +4,7 @@ const PendingDeletion = require('./models/PendingDeletion');
 const BotMessage = require('./models/BotMessage');
 const { advanceNextRun } = require('./utils/schedule');
 const { buildUrlButtonsMarkup } = require('./utils/urlButtons');
+const { buildTextOptions, buildCaptionOptions } = require('./utils/textOptions');
 
 const MEDIA_SEND_FN = {
   photo: 'sendPhoto',
@@ -27,12 +28,12 @@ async function sendJob(bot, job) {
       const fn = MEDIA_SEND_FN[job.media.type] || 'sendPhoto';
       msg = await bot.telegram[fn](job.chatId, job.media.fileId, {
         caption: job.text || undefined,
-        parse_mode: 'HTML',
+        ...buildCaptionOptions(job),
         reply_markup
       });
     } else {
       msg = await bot.telegram.sendMessage(job.chatId, job.text, {
-        parse_mode: 'HTML',
+        ...buildTextOptions(job),
         reply_markup,
         disable_web_page_preview: false
       });
