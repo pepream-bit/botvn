@@ -21,7 +21,7 @@ async function sendJob(bot, job) {
   }
 
   try {
-    const reply_markup = buildUrlButtonsMarkup(job.urlButtons);
+    const reply_markup = buildUrlButtonsMarkup(job.urlButtons, job._id);
     let msg;
     if (hasMedia) {
       const fn = MEDIA_SEND_FN[job.media.type] || 'sendPhoto';

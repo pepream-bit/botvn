@@ -252,8 +252,21 @@ bot.on('my_chat_member', async (ctx) => {
 // ---------- callback query router ----------
 
 bot.on('callback_query', async (ctx) => {
-  if (!isWhitelisted(ctx.from.id)) return ctx.answerCbQuery().catch(() => {});
   const data = ctx.callbackQuery.data;
+
+  // Popup buttons live on broadcast messages inside groups — anyone can tap
+  // them, so this is handled before (and outside) the whitelist gate below.
+  if (data.startsWith('popup:')) {
+    const [, jobId, indexStr] = data.split(':');
+    const job = await Job.findById(jobId).catch(() => null);
+    const btn = job?.urlButtons?.[Number(indexStr)];
+    if (btn && btn.popupText) {
+      return ctx.answerCbQuery(btn.popupText, { show_alert: true }).catch(() => {});
+    }
+    return ctx.answerCbQuery().catch(() => {});
+  }
+
+  if (!isWhitelisted(ctx.from.id)) return ctx.answerCbQuery().catch(() => {});
   await ctx.answerCbQuery().catch(() => {});
 
   if (data === 'back:groups') {
@@ -322,17 +335,42 @@ bot.on('callback_query', async (ctx) => {
 
     if (action === 'seturlbtn') {
       wizardState.set(ctx.from.id, { step: 'awaiting_urlbuttons', chatId: Number(chatId), jobId });
-      return ctx.reply(
-        '🔗 พิมพ์ปุ่ม รูปแบบ: ข้อความปุ่ม - ลิงก์\n' +
-          'ตัวอย่าง:\nเว็บไซต์ - https://example.com\nติดต่อแอดมิน - https://t.me/xxx\n\n' +
-          'พิมพ์ได้หลายบรรทัด (1 ปุ่ม/บรรทัด) — จะแทนที่ปุ่มเดิมทั้งหมด\n' +
-          'พิมพ์ "ลบ" เพื่อล้างปุ่มทั้งหมด'
-      );
+      const text =
+        '🔗 <b>ตั้งค่าปุ่มลิงก์ใต้ข้อความ</b>\n' +
+        'พิมพ์ข้อความตามรูปแบบนี้:\n\n' +
+        '• เพิ่มปุ่มเดียว:\n<code>ชื่อปุ่ม - https://example.com</code>\n\n' +
+        '• เพิ่มหลายปุ่มในแถวเดียวกัน:\n<code>ปุ่ม1 - https://a.com && ปุ่ม2 - https://b.com</code>\n\n' +
+        '• เพิ่มหลายแถว (ขึ้นบรรทัดใหม่):\n<code>ปุ่ม1 - https://a.com\nปุ่ม2 - https://b.com</code>\n\n' +
+        '<u>ปุ่มพิเศษ</u>\n' +
+        '• ปุ่มแสดง popup (ไม่เปิดลิงก์):\n<code>ชื่อปุ่ม - popup: ข้อความที่จะแสดง</code>\n\n' +
+        'ข้อความนี้จะแทนที่ปุ่มเดิมทั้งหมด';
+      const kb = Markup.inlineKeyboard([
+        [Markup.button.callback('⚡ สร้างปุ่มแบบทีละขั้นตอน', 'btnwiz:start')],
+        [Markup.button.callback('🚫 ล้างปุ่มทั้งหมด', `job:clearurlbtn:${chatId}:${jobId}`)],
+        [Markup.button.callback('❌ ยกเลิก', `job:cancelwizard:${chatId}:${jobId}`)]
+      ]);
+      return ctx.reply(text, { parse_mode: 'HTML', ...kb });
     }
     if (action === 'seeurlbtn') {
       const job = await Job.findById(jobId);
       if (!job || !job.urlButtons || job.urlButtons.length === 0) return ctx.reply('🔗 ยังไม่ได้ตั้งค่า Url Buttons');
-      return ctx.reply('🔗 ปุ่มปัจจุบัน (กดทดสอบได้):', { reply_markup: buildUrlButtonsMarkup(job.urlButtons) });
+      return ctx.reply('🔗 ปุ่มปัจจุบัน (กดทดสอบได้):', {
+        reply_markup: buildUrlButtonsMarkup(job.urlButtons, job._id)
+      });
+    }
+
+    if (action === 'clearurlbtn') {
+      const job = await Job.findById(jobId);
+      if (!job) return;
+      job.urlButtons = [];
+      await job.save();
+      wizardState.delete(ctx.from.id);
+      return renderJobBuilder(ctx, Number(chatId), jobId);
+    }
+
+    if (action === 'cancelwizard') {
+      wizardState.delete(ctx.from.id);
+      return renderJobBuilder(ctx, Number(chatId), jobId);
     }
 
     if (action === 'preview') {
@@ -342,7 +380,7 @@ bot.on('callback_query', async (ctx) => {
       if (!job || (!hasText && !hasMedia)) {
         return ctx.reply('👀 ยังไม่ได้ตั้งค่า Text หรือ Media เลย ไม่มีอะไรให้พรีวิว');
       }
-      const reply_markup = buildUrlButtonsMarkup(job.urlButtons);
+      const reply_markup = buildUrlButtonsMarkup(job.urlButtons, job._id);
       if (hasMedia) {
         const fn = REPLY_FN[job.media.type] || 'replyWithPhoto';
         return ctx[fn](job.media.fileId, { caption: job.text || undefined, parse_mode: 'HTML', reply_markup });
@@ -405,6 +443,62 @@ bot.on('callback_query', async (ctx) => {
     if (action === 'delete') {
       await Job.deleteOne({ _id: jobId });
       return sendJobList(ctx, Number(chatId));
+    }
+  }
+
+  if (ns === 'btnwiz') {
+    const [action] = rest;
+    const st = wizardState.get(ctx.from.id);
+
+    if (action === 'start') {
+      if (!st || !st.chatId || !st.jobId) return;
+      wizardState.set(ctx.from.id, { step: 'btnwiz_title', chatId: st.chatId, jobId: st.jobId, rows: [[]] });
+      return ctx.reply('พิมพ์ชื่อปุ่มที่ 1:');
+    }
+
+    if (!st || !st.rows) return;
+
+    if (action === 'sameline') {
+      st.step = 'btnwiz_title';
+      wizardState.set(ctx.from.id, st);
+      return ctx.reply('พิมพ์ชื่อปุ่มถัดไป (แถวเดียวกัน):');
+    }
+
+    if (action === 'newrow') {
+      st.rows.push([]);
+      st.step = 'btnwiz_title';
+      wizardState.set(ctx.from.id, st);
+      return ctx.reply('พิมพ์ชื่อปุ่มถัดไป (ขึ้นแถวใหม่):');
+    }
+
+    if (action === 'done') {
+      const job = await Job.findById(st.jobId);
+      if (!job) {
+        wizardState.delete(ctx.from.id);
+        return;
+      }
+      const flat = [];
+      st.rows.forEach((row, rowIndex) => {
+        row.forEach((b) => flat.push({ row: rowIndex, text: b.text, url: b.url || null, popupText: b.popupText || null }));
+      });
+      if (flat.length === 0) {
+        wizardState.delete(ctx.from.id);
+        return renderJobBuilder(ctx, st.chatId, st.jobId);
+      }
+      job.urlButtons = flat;
+      await job.save();
+      const chatId = st.chatId;
+      const jobId = st.jobId;
+      wizardState.delete(ctx.from.id);
+      await ctx.reply(`✅ สร้างปุ่มเรียบร้อย (${flat.length} ปุ่ม)`);
+      return renderJobBuilder(ctx, chatId, jobId);
+    }
+
+    if (action === 'cancel') {
+      const chatId = st.chatId;
+      const jobId = st.jobId;
+      wizardState.delete(ctx.from.id);
+      return renderJobBuilder(ctx, chatId, jobId);
     }
   }
 });
@@ -594,6 +688,44 @@ bot.on('message', async (ctx, next) => {
       wizardState.delete(ctx.from.id);
       await ctx.reply('✅ บันทึกแล้ว');
       return sendGroupMenu(ctx, st.chatId);
+    }
+
+    case 'btnwiz_title': {
+      if (text === undefined) return ctx.reply('❌ พิมพ์ชื่อปุ่มเป็นตัวอักษร');
+      if (!raw) return ctx.reply('❌ ชื่อปุ่มห้ามว่าง ลองใหม่');
+      st.pendingTitle = raw;
+      st.step = 'btnwiz_target';
+      wizardState.set(ctx.from.id, st);
+      return ctx.reply('พิมพ์ลิงก์ (https://...) หรือพิมพ์ "popup: ข้อความ" สำหรับปุ่มแสดงข้อความ');
+    }
+
+    case 'btnwiz_target': {
+      if (text === undefined) return ctx.reply('❌ พิมพ์ลิงก์ หรือ "popup: ข้อความ"');
+      const popupMatch = /^popup\s*:\s*(.+)$/i.exec(raw);
+      let newBtn;
+      if (popupMatch) {
+        newBtn = { text: st.pendingTitle, popupText: popupMatch[1].trim(), url: null };
+      } else {
+        if (!/^https?:\/\//i.test(raw) && !/^tg:\/\//i.test(raw)) {
+          return ctx.reply('❌ ลิงก์ไม่ถูกต้อง ต้องขึ้นต้นด้วย http://, https:// หรือ tg:// หรือพิมพ์ "popup: ข้อความ"');
+        }
+        newBtn = { text: st.pendingTitle, url: raw, popupText: null };
+      }
+      st.rows[st.rows.length - 1].push(newBtn);
+      delete st.pendingTitle;
+      st.step = 'btnwiz_continue';
+      wizardState.set(ctx.from.id, st);
+      const kb = Markup.inlineKeyboard([
+        [Markup.button.callback('➕ เพิ่มปุ่มแถวเดียวกัน', 'btnwiz:sameline')],
+        [Markup.button.callback('⬇️ ขึ้นแถวใหม่', 'btnwiz:newrow')],
+        [Markup.button.callback('✅ เสร็จสิ้น', 'btnwiz:done')],
+        [Markup.button.callback('❌ ยกเลิก', 'btnwiz:cancel')]
+      ]);
+      return ctx.reply(`✅ เพิ่มปุ่ม "${newBtn.text}" แล้ว\nต้องการทำอะไรต่อ?`, kb);
+    }
+
+    case 'btnwiz_continue': {
+      return ctx.reply('กรุณากดปุ่มด้านบนเพื่อดำเนินการต่อ หรือกด ❌ ยกเลิก');
     }
 
     default:

@@ -9,7 +9,14 @@ const jobSchema = new mongoose.Schema({
     fileId: { type: String, default: null },
     type: { type: String, enum: ['photo', 'video', 'document', 'animation', null], default: null }
   },
-  urlButtons: [{ text: String, url: String }],
+  urlButtons: [
+    {
+      row: { type: Number, default: 0 },
+      text: String,
+      url: { type: String, default: null },
+      popupText: { type: String, default: null } // if set, button shows a popup instead of opening a link
+    }
+  ],
 
   // ---- schedule: repeat every intervalSeconds, first run anchored to startHour:startMinute (Asia/Bangkok) ----
   intervalSeconds: { type: Number, default: 3600 },
